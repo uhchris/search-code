@@ -105,7 +105,7 @@ This matches a general retrieval-UX principle: **richer single calls beat sparse
 
 | Bench | v6 baseline | **v17b (shipped)** | v17c (rejected) |
 |-------|---|---|---|
-| Frink internal R@1 | 68% | **70%** | n/a (rendering only) |
-| Frink internal R@5 | 90% | **98%** | n/a |
+| Internal bench R@1 | 68% | **70%** | n/a (rendering only) |
+| Internal bench R@5 | 90% | **98%** | n/a |
 | SWE-poly agent R@1 any-hit | n/a | **19/24 (79%)** | 16/23 (70%) |
 | SWE-poly agent mean R@1 | n/a | **0.506** | 0.448 |

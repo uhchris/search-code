@@ -22,7 +22,7 @@ The drop is **not a regression** — the implementation is unchanged (commit `ba
 | Type | Description | Real-world example |
 |------|------------|--------------------|
 | `exact_symbol_with_context` | Agent knows the exact identifier and wraps it in disambiguating prose to specify which one they mean. Tool's description channel doesn't index symbol names verbatim; FTS5 AND-combine kills BM25 path due to verbose wrapping. | "disconnectIntegration trpc proc handler local repo path" — same symbol exists in 2 files (cloud client + tRPC router); agent wants the router |
-| `concept_with_constraint` | Concept query plus a narrowing clause (flag-gate, path constraint, "after migration X"). Tests whether the constraint shifts ranking. | "frink flows MCP server registration for Claude agent gated by launch flag" — concept + flag-gate constraint |
+| `concept_with_constraint` | Concept query plus a narrowing clause (flag-gate, path constraint, "after migration X"). Tests whether the constraint shifts ranking. | "internal flows MCP server registration for Claude agent gated by launch flag" — concept + flag-gate constraint |
 | `concept_resolves_to_symbol` / `concept_resolves_to_schema` | Concept that ultimately maps to a specific repo file, schema definition, or other plumbing-style file. The plumbing files have generic descriptions; the concept doesn't surface them. | "read user integrations from local SQLite repo besides router list" — wants `db/repos/user-integrations.ts` |
 
 ## Per-case results — 7 new cases
@@ -33,7 +33,7 @@ The drop is **not a regression** — the implementation is unchanged (commit `ba
 | trpc-generate-webhook-endpoint | exact_symbol_with_context | ✗ | ✓ | ✓ | 0.50 | Right file top-3, wrong chunk |
 | user-integrations-repo-readers | concept_resolves_to_symbol | ✗ | ✗ | ✗ | 0.00 | **Total miss** |
 | crossmachine-flag-gates | concept_with_constraint | ✓ | ✓ | ✓ | 1.00 | WIN |
-| frink-mcp-launch-flag-gate | concept_with_constraint | ✓ | ✓ | ✓ | 1.00 | WIN |
+| internal-mcp-launch-flag-gate | concept_with_constraint | ✓ | ✓ | ✓ | 1.00 | WIN |
 | chat-data-shape-schema | concept_resolves_to_schema | ✗ | ✗ | ✗ | 0.00 | **Total miss** |
 | flows-mcp-tools-server-register | concept_with_constraint | ✗ | ✓ | ✓ | 0.50 | Right file top-3 |
 
@@ -67,7 +67,7 @@ The query mentions: `user integrations`, `local SQLite repo`, `sandbox_id`, `ses
 
 ### Failure mode 3 — concept-dominance rescues (control)
 
-Cases: `crossmachine-flag-gates`, `frink-mcp-launch-flag-gate` — both PASSED.
+Cases: `crossmachine-flag-gates`, `internal-mcp-launch-flag-gate` — both PASSED.
 
 When the query has a strong concept signal (MCP server registration, socket connection / remote dispatch), the current arch works. The `gated by launch flag` clause adds a constraint but doesn't drown the concept signal. These pass at R@1.
 

@@ -127,7 +127,7 @@ export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
 // v8a (merged full rawCode + description) regressed R@1 79% → 15%. v12 tried a
 // structural identifier MANIFEST as prefix (GraphCodeBERT-style leaf identifiers
 // + CodeT5-style filtering, prefix placement per arXiv:2412.15241): on the 40-case
-// frink bench it cost R@1 −7pp + MRR −0.039 to lift one Mode 2 case (chat schema)
+// internal bench it cost R@1 −7pp + MRR −0.039 to lift one Mode 2 case (chat schema)
 // from R@5=0 to R@3. Reverted. Manifest path lives in chunker.extractManifest in
 // case future work wants to revisit a smaller-cap or selective-application variant.
 

@@ -24,7 +24,7 @@ R@1 + R@3 + MRR all improved. R@5 lost 2 cases to chat-data-shape-schema (Mode 2
 | trpc-generate-webhook-endpoint | R@3 ✓ MRR 0.50 | **R@1 ✓ MRR 1.00** | **Mode 1 WIN** (per-property chunks) |
 | user-integrations-repo-readers | R@5=0 | **R@1 ✓ MRR 1.00** | **Mode 2 WIN** (Drizzle/exported emit fix) |
 | crossmachine-flag-gates | R@1 ✓ | R@1 ✓ | stable |
-| frink-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | stable |
+| internal-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | stable |
 | chat-data-shape-schema | R@5=0 | **R@5=0** | **REGRESSION RETAINED** — manifest was needed for this case |
 | flows-mcp-tools-server-register | R@3 ✓ MRR 0.50 | R@3 ✓ MRR 0.50 | stable |
 
@@ -62,7 +62,7 @@ Re-ran SWE-poly with v14 (manifest dropped, chunker fixes retained):
 
 **Zero net change vs v9 baseline.** Chunker fixes don't add many chunks to plain-JS codebases (tailwind +5, prettier ~stable, three.js minor) — the chunker rules target patterns absent in those repos (Drizzle, tRPC). Tailwindcss-853 (`configurePlugins.js`) still total miss as on every prior version — chronic, pre-dates all changes.
 
-**Best of both:** v14 improves frink's TS/Drizzle/tRPC retrieval without disturbing other codebases.
+**Best of both:** v14 improves internal's TS/Drizzle/tRPC retrieval without disturbing other codebases.
 
 ## Cumulative path summary
 

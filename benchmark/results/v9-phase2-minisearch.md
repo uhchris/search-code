@@ -64,7 +64,7 @@ OR-combine on a code-aware tokenizer that emits original + split tokens means EV
 
 ### File sizes
 
-- frink (4898 chunks): 5.6MB JSON
+- internal (4898 chunks): 5.6MB JSON
 - three.js largest (1861 chunks): ~2MB
 - tailwindcss avg (97 chunks): ~150KB
 
@@ -76,7 +76,7 @@ Acceptable. JSON file lives next to the SQLite DB, gitignored alongside it.
 
 Phase 2 has architectural value for future tuning:
 - MiniSearch supports fuzzy, prefix, per-field boosts, custom scoring — none used in v9 but available
-- claude-context and SocratiCode both use library-grade BM25 via Milvus/Qdrant; matching that pattern keeps frink aligned with proven implementations
+- claude-context and SocratiCode both use library-grade BM25 via Milvus/Qdrant; matching that pattern keeps internal aligned with proven implementations
 
 Phase 2 has cost:
 - One new dependency (`minisearch`)

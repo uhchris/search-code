@@ -73,9 +73,9 @@ The retrieval architecture has been right since v16. The non-agent bench under-m
 
 | Bench surface | v6 baseline | **v16 final** | Δ |
 |---------------|---|---|---|
-| Frink internal R@1 | 68% | **70%** | +2pp |
-| Frink internal R@5 | 90% | **98%** | +8pp |
-| Frink internal MRR@10 | 0.764 | **0.800** | +0.036 |
+| Internal bench R@1 | 68% | **70%** | +2pp |
+| Internal bench R@5 | 90% | **98%** | +8pp |
+| Internal bench MRR@10 | 0.764 | **0.800** | +0.036 |
 | SWE-poly non-agent any-hit R@1 | 13/24 | 13/24 | = |
 | SWE-poly non-agent any-hit R@5 | 20/24 | 20/24 | = |
 | **SWE-poly agent-mode any-hit R@1** | **untested baseline** | **15/24** | n/a |

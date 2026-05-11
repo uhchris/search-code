@@ -49,7 +49,7 @@ Round-trip latency on a 6,000-chunk index: ~150ms.
 
 ## Benchmarks
 
-### Frink internal (40 real-world failure-mode cases, mined from session history)
+### Internal benchmark (40 real-world failure-mode cases, mined from session history)
 
 The bench was expanded in v11 with 7 cases from production session logs covering three failure types: same-file multi-chunk (Mode 1), generic plumbing descriptions (Mode 2), and concept-with-constraint queries.
 
@@ -63,6 +63,16 @@ The bench was expanded in v11 with 7 cases from production session logs covering
 **v17b vs v6:** R@1 +2pp, R@3 +3pp, R@5 +8pp, MRR +0.036.
 
 Real-world failure-mode coverage: 4/7 R@1, 7/7 R@3, 9/10 R@5 across all user-reported missed-query patterns (vs 2/7, 4/7, 5/7 on v6 baseline).
+
+**vs grep baseline** (single-call `rg` with the longest keyword from each query — fair single-shot grep, not multi-call agent grep):
+
+| Metric | searchCode (v17b) | grep | Δ |
+|---|---|---|---|
+| R@1 | 28/40 (70%) | 1/40 (3%) | **+67pp** |
+| R@3 | 35/40 (88%) | 4/40 (10%) | **+78pp** |
+| Avg tokens/query | 2,504 | 5,174 | **−52%** |
+
+searchCode is 23× better at finding the right file at rank 1 on conceptual queries AND 2× cheaper per call. Grep wins on literal-token queries where you already know the verbatim identifier — the MCP tool description explicitly routes those to grep.
 
 See `benchmark/results/` for the full development arc including 5 reverted experiments documented as anti-patterns.
 

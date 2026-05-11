@@ -22,7 +22,7 @@ Query → embedQuery() ──────────────► dense chann
                                                      RRF K=60 over 3 ranks ──► top-K
 ```
 
-## Headline numbers — frink internal (40 cases)
+## Headline numbers — internal bench (40 cases)
 
 | Version | R@1 | R@3 | R@5 | MRR | Mode 1+2 R@1 | Notes |
 |---------|-----|-----|-----|-----|---|---|
@@ -41,7 +41,7 @@ Query → embedQuery() ──────────────► dense chann
 | trpc-generate-webhook-endpoint | R@3 MRR 0.50 | **R@1 MRR 1.00** |
 | user-integrations-repo-readers | **R@5=0** | **R@1 MRR 1.00** |
 | crossmachine-flag-gates | R@1 ✓ | R@1 ✓ |
-| frink-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ |
+| internal-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ |
 | chat-data-shape-schema | **R@5=0** | **R@5 ✓** |
 | flows-mcp-tools-server-register | R@3 | R@3 |
 | envelope-encryption (chronic paraphrase) | **R@5=0** | **R@5 ✓** |
@@ -99,7 +99,7 @@ User said "two distinct channels fighting for top spot" four times before this g
 
 ## What's left (deferred)
 
-- `ipc-git-events-subscription` — last R@5=0 on frink. Likely needs symbol_name boost or fourth channel.
+- `ipc-git-events-subscription` — last R@5=0 on internal. Likely needs symbol_name boost or fourth channel.
 - SWE-poly long-query problem — query summarization or stopword-based top-K-token selection. All retrieval improvements are equally defeated by current methodology.
 - `chat-data-shape-schema` at R@5 not R@1 — needs better describer prompt for schema files OR bigger weight on code-channel for plumbing.
 - HyPE 2.0 (different design from prior failed attempt) — defer.

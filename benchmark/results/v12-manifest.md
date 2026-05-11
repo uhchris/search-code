@@ -31,7 +31,7 @@ R@5 net positive but R@1 regressed. The R@1 dip is the manifest-prefix dilution 
 | user-integrations-repo-readers | **R@5=0** | **R@1 ✓ MRR 1.00** | **WIN — chunker** |
 | chat-data-shape-schema | **R@5=0** | R@3 ✓ MRR 0.33 | **partial WIN — chunker** |
 | crossmachine-flag-gates | R@1 ✓ | R@1 ✓ | stable |
-| frink-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | stable |
+| internal-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | stable |
 | flows-mcp-tools-server-register | R@3 ✓ MRR 0.50 | R@3 ✓ MRR 0.50 | stable |
 
 **Net failure-mode gains:** 2 R@5=0 cases lifted (1 to R@1, 1 to R@3). Mode 1 cases (same-file multi-chunk picking wrong chunk) **not** fixed by manifest — the wrong chunk's description still outranks the right chunk.

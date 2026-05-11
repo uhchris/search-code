@@ -24,7 +24,7 @@ Same embedding model (`embeddinggemma`) for both dense channels — SOTA on MTEB
 | `src/store.ts` | Schema: add `code_embedding BLOB` column. Idempotent migration via `PRAGMA table_info`. New `updateCodeEmbedding`, `getChunksNeedingCodeEmbedding`, `clearAllCodeEmbeddings`, `getAllCodeEmbeddings`. `searchHybrid` extended: 3-way RRF combining description-rank + code-rank + BM25-rank. Code channel skipped if no embeddings (DBs pre-dating v16 degrade to v15 behavior). |
 | `src/index.ts` | `--reembed-only` clears + re-embeds BOTH channels. Phase 1 also embeds rawCode for new chunks. |
 
-## Headline numbers — frink internal bench (40 cases)
+## Headline numbers — internal bench bench (40 cases)
 
 | Metric | v6/v11 | v14/v15 | **v16** | Δ vs v6 |
 |--------|---|---|---|---|
@@ -44,7 +44,7 @@ Same embedding model (`embeddinggemma`) for both dense channels — SOTA on MTEB
 | trpc-generate-webhook-endpoint | R@3 MRR 0.50 | R@1 MRR 1.00 |
 | user-integrations-repo-readers | **R@5=0** | R@1 MRR 1.00 |
 | crossmachine-flag-gates | R@1 ✓ | R@1 ✓ |
-| frink-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ |
+| internal-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ |
 | chat-data-shape-schema | **R@5=0** | **R@5 ✓** (was unfixable in v6/v15) |
 | flows-mcp-tools-server-register | R@3 MRR 0.50 | R@3 MRR 0.50 |
 | envelope-encryption (chronic) | **R@5=0** | **R@5 ✓** |
@@ -67,7 +67,7 @@ Same embedding model (`embeddinggemma`) for both dense channels — SOTA on MTEB
 
 Why: SWE-poly's `semantic` retriever passes the **full multi-paragraph problem_statement** as query. Both dense channels embed a long NL paragraph to a blurry centroid. AND-combine FTS5 over 100+ words returns 0 from BM25. Three-channel RRF doesn't help when ALL three channels' query input is too generic. Real-world MCP usage with short queries WILL benefit (not measured here — agent-mode bench is API-cost expensive).
 
-## Why R@1 unchanged but R@5 jumped on frink
+## Why R@1 unchanged but R@5 jumped on internal
 
 R@1 is winner-takes-all. The top-1 chunk is whichever channel has the most decisive rank — usually description channel for paraphrase queries (its strength), or BM25 for exact-token queries (its strength). Adding the code channel doesn't usually overrule the winner; instead it adds OTHER strong candidates to the top-K.
 
@@ -98,7 +98,7 @@ The user told me this 4 times before I tried it. Lesson recorded.
 
 ## Decision
 
-**Ship v16.** Pareto win on every frink-internal metric vs every prior version. Zero regression on SWE-poly. Real-world R@5 coverage boost of +10pp directly addresses the broad agent-search reliability the user wanted from the start.
+**Ship v16.** Pareto win on every internal-internal metric vs every prior version. Zero regression on SWE-poly. Real-world R@5 coverage boost of +10pp directly addresses the broad agent-search reliability the user wanted from the start.
 
 ## What's left (chronic, deferred)
 

@@ -47,7 +47,7 @@ The 4 cases that survived (`chat-name-needle`, `retry-with-jitter`, `credential-
 
 embeddingGemma is a sentence-level embedder trained on prose. When ~80% of the input is code, the resulting embedding is dominated by the lexical structure of TypeScript syntax. Two unrelated functions both containing `import`, `const`, `=>`, `interface` produce embeddings that are closer to each other than to a prose query about the *purpose* of either function.
 
-Validated approaches (claude-context, SocratiCode) embed raw code without descriptions — they rely on the embedder's code-trained variant or include filepath as a coarse domain hint. Frink's stack uses a prose-trained embedder, so prose descriptions are the only effective signal.
+Validated approaches (claude-context, SocratiCode) embed raw code without descriptions — they rely on the embedder's code-trained variant or include filepath as a coarse domain hint. Internal's stack uses a prose-trained embedder, so prose descriptions are the only effective signal.
 
 ## Implementation Status
 

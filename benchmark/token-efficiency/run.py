@@ -40,7 +40,7 @@ except ImportError:
 
 SCRIPT_DIR   = Path(__file__).parent
 TOOL_DIR     = SCRIPT_DIR.parent.parent          # .claude/tools/semantic-search/
-FRINK_ROOT   = TOOL_DIR.parent.parent.parent     # repo root
+REPO_ROOT   = TOOL_DIR.parent.parent.parent     # repo root
 GROUND_TRUTH = TOOL_DIR / "benchmark" / "ground-truth.json"
 RESULTS_DIR  = SCRIPT_DIR / "results"
 NODE_TOOL    = os.environ.get("SEMANTIC_SEARCH_TOOL", str(TOOL_DIR / "dist" / "index.js"))
@@ -93,7 +93,7 @@ SEMANTIC_TOOL = {
 BASH_TOOL = {
     "name": "bash",
     "description": (
-        "Run a read-only shell command inside the frink repo. "
+        "Run a read-only shell command inside the internal repo. "
         "Allowed: grep, find, cat, head, ls, wc. "
         "Do NOT use git, curl, npm, node, or write commands. "
         "Working directory is the project root."
@@ -135,7 +135,7 @@ def run_bash(command: str) -> str:
     try:
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True,
-            cwd=str(FRINK_ROOT), timeout=15,
+            cwd=str(REPO_ROOT), timeout=15,
         )
         output = (result.stdout + result.stderr).strip()
         return output[:3000] if output else "(no output)"
@@ -165,7 +165,7 @@ def run_agent(
         tools = [BASH_TOOL, SUBMIT_TOOL]
         user_msg = (
             f"Find the file(s) in this codebase that implement: {query}\n\n"
-            f"The repo root is: {FRINK_ROOT}\n"
+            f"The repo root is: {REPO_ROOT}\n"
             f"Source lives under src/ and socket-server/src/."
         )
 

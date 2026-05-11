@@ -58,7 +58,7 @@ Splits enable both literal-compound queries AND split-form queries to find the r
 
 ## Benchmark results (UNCHANGED on bench, neutral)
 
-### Frink internal (40 cases)
+### Internal bench (40 cases)
 
 | Metric | v14 | v15 | Δ |
 |--------|-----|-----|---|
@@ -67,7 +67,7 @@ Splits enable both literal-compound queries AND split-form queries to find the r
 | R@5 | 35/40 = 88% | 35/40 = 88% | = |
 | MRR@10 | 0.787 | 0.783 | −0.004 (noise) |
 
-No change. Frink internal queries already had R@1 wins via per-property chunks (v13/v14). Splits provide redundant signal here.
+No change. Internal bench queries already had R@1 wins via per-property chunks (v13/v14). Splits provide redundant signal here.
 
 ### SWE-PolyBench (24 instances, all repos)
 

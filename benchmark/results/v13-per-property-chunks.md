@@ -23,7 +23,7 @@
 | user-integrations-repo-readers | R@5=0 | R@1 ✓ MRR 1.00 | **R@1 ✓ MRR 1.00** | Mode 2 WIN (chunker fix) |
 | chat-data-shape-schema | R@5=0 | R@3 ✓ MRR 0.33 | **R@3 ✓ MRR 0.33** | Mode 2 partial (R@3) |
 | crossmachine-flag-gates | R@1 ✓ | R@1 ✓ | R@1 ✓ | stable |
-| frink-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | R@1 ✓ | stable |
+| internal-mcp-launch-flag-gate | R@1 ✓ | R@1 ✓ | R@1 ✓ | stable |
 | flows-mcp-tools-server-register | R@3 ✓ MRR 0.50 | R@3 ✓ MRR 0.50 | R@3 ✓ MRR 0.50 | stable |
 
 **Net failure-mode coverage: 4 of 7 R@1 (was 2 of 7); all 7 R@3 (was 4 of 7).**

@@ -158,7 +158,7 @@ The hybrid infrastructure is in place and tested. Future work (HyDE, query rewri
 
 ## v9 vs all prior benchmarks (full progression)
 
-### Internal 33-case bench (frink codebase, mixed query types)
+### Internal 33-case bench (internal codebase, mixed query types)
 
 Original bench was 25 cases (v1–v5); expanded to 33 in v6 by adding 8 harder cases. That's why v6 headline drops from v5's 84% — same retrieval quality, harder bench. On the original 25 cases, v6 stayed at 84% R@1 / MRR 0.880.
 

@@ -1,17 +1,17 @@
 # Benchmark v10: Code-Only Embedding (claude-context emulation)
 
 **Date:** 2026-05-07
-**Goal:** Test whether dropping the LLM describer phase and embedding raw code directly (matching claude-context's `chunk.content` pattern, `context.ts:935`) outperforms frink's description-based embedding for the existing benchmarks.
+**Goal:** Test whether dropping the LLM describer phase and embedding raw code directly (matching claude-context's `chunk.content` pattern, `context.ts:935`) outperforms internal's description-based embedding for the existing benchmarks.
 **Hypothesis:** raw code is the actual artifact; embedding it directly should retain code-search quality while saving 7x indexing time (no `gemma4:26b` describer call per chunk). embeddinggemma is code-aware (SOTA on MTEB(Code) <500M, arXiv:2509.20354) so should embed raw code well.
 **Method:** parallel column `code_only_embedding` populated by `embed(chunk.rawCode)`; `SEMANTIC_CHANNEL=code` env var routes search through `searchByCodeOnlySimilarity`. Original `embedding` column (description-based) untouched. Reversible.
 
 ## Verdict — REVERT
 
-Code-only embedding **loses where it matters** on every benchmark we ran. Description-based embedding (v6/v9 baseline) is the right architectural choice for frink.
+Code-only embedding **loses where it matters** on every benchmark we ran. Description-based embedding (v6/v9 baseline) is the right architectural choice for internal.
 
 ## Results — full comparison
 
-### Internal 33-case bench (frink codebase)
+### Internal 33-case bench (internal codebase)
 
 | Metric | v9 (description) | **v10 (code-only)** | Δ |
 |--------|---|---|---|
@@ -43,7 +43,7 @@ Curious result: pure-semantic R@k bucket counts are byte-identical (36.3 / 49.2 
 
 Token savings improved (~5pp) — code-only chunks are slightly shorter contexts. Doesn't compensate for accuracy loss.
 
-### Duplicate detection (the original frink design goal)
+### Duplicate detection (the original internal design goal)
 
 | Case | v9 MRR | v10 MRR | Verdict |
 |---|---|---|---|
@@ -72,13 +72,13 @@ Code-only actually has a slightly larger sim gap to non-duplicates (0.59 → 0.2
 
 3. **Scattered patterns lose** — descriptions stitch together logic across multiple files into a single semantic statement. Raw code is local; can't capture cross-file intent.
 
-4. **Indexing speedup is real** — frink reindex went from ~1hr (with describer) to ~17min (embedder-only) for 4983 chunks. That speedup is the only objective v10 win.
+4. **Indexing speedup is real** — internal reindex went from ~1hr (with describer) to ~17min (embedder-only) for 4983 chunks. That speedup is the only objective v10 win.
 
 ## Architectural conclusion
 
-Frink and claude-context optimize for different jobs:
+Internal and claude-context optimize for different jobs:
 
-| Aspect | claude-context | frink |
+| Aspect | claude-context | internal |
 |---|---|---|
 | Primary use case | Code search (find files matching query) | Code search + semantic duplicate detection (commit-guard) |
 | Embed text | `chunk.content` (raw code) | `${path} [${symbol}]: ${description}` (LLM prose) |
@@ -86,13 +86,13 @@ Frink and claude-context optimize for different jobs:
 | Bench (their reported) | F1=0.40 (SWE-bench Verified, vs grep baseline F1=0.40) | R@1=76% internal, 49.2% SWE-poly agent |
 | Relative R@1 in our stack | 58% (transplanted v10) | 76% (v9) |
 
-**Frink's LLM-description architecture is the right choice for frink's use case.** The 7x indexing cost buys 18pp R@1 on internal bench and 8.4pp R@1 on SWE-poly agent. Description embeddings cluster duplicates AND rank paraphrase/error/scattered cases better.
+**Internal's LLM-description architecture is the right choice for internal's use case.** The 7x indexing cost buys 18pp R@1 on internal bench and 8.4pp R@1 on SWE-poly agent. Description embeddings cluster duplicates AND rank paraphrase/error/scattered cases better.
 
-This does NOT prove "frink > claude-context" — we ran their *embed-text* design choice in our stack, not their full binary. They'd score differently with their Milvus+OpenAI defaults on a code-search-only benchmark. But within frink's stack and for frink's job, descriptions win.
+This does NOT prove "internal > claude-context" — we ran their *embed-text* design choice in our stack, not their full binary. They'd score differently with their Milvus+OpenAI defaults on a code-search-only benchmark. But within internal's stack and for internal's job, descriptions win.
 
 ## Implementation status (post-revert)
 
-- `code_only_embedding` column populated for frink (4983 chunks) + 24 SWE-poly DBs (~13K chunks). Total embedder time spent: ~6 hours.
+- `code_only_embedding` column populated for internal (4983 chunks) + 24 SWE-poly DBs (~13K chunks). Total embedder time spent: ~6 hours.
 - v10 src changes (column, helpers, CLI flag, env hooks) being reverted.
 - Column remains in schema. Future ablation experiments can use it without re-embedding.
 
