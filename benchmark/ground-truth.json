@@ -1,0 +1,458 @@
+[
+  {
+    "id": "pluralize-duplicate",
+    "query": "function that pluralizes a word based on count",
+    "type": "duplicate_detection",
+    "expected": [
+      "src/renderer/features/sidebar/utils/pluralize.ts",
+      "src/renderer/features/agents/utils/pluralize.ts",
+      "src/renderer/lib/utils/pluralize.ts"
+    ],
+    "note": "Three identical pluralize implementations exist — find all three"
+  },
+  {
+    "id": "relative-time-duplicate",
+    "query": "format a date as relative time like '2 hours ago'",
+    "type": "duplicate_detection",
+    "expected": [
+      "src/renderer/lib/utils/format-time.ts",
+      "src/renderer/features/changes/utils/date.ts"
+    ]
+  },
+  {
+    "id": "chat-name-needle",
+    "query": "generates a name for a chat conversation using an LLM",
+    "type": "needle_in_haystack",
+    "expected": [
+      "socket-server/src/lib/chat-name-generator.ts",
+      "src/main/lib/trpc/routers/chats/helpers/name-generation.ts",
+      "src/main/lib/trpc/routers/chats/helpers/name-generation-async.ts"
+    ],
+    "note": "Multiple valid implementations exist — all generate chat names via LLM. Any one in top 3 counts."
+  },
+  {
+    "id": "truncate-scatter",
+    "query": "truncate a string to a max length and append ellipsis",
+    "type": "scattered_pattern",
+    "expected": [
+      "src/renderer/features/flows/FlowEditor/truncate-ui-string.ts",
+      "src/shared/lib/bash-patterns.ts",
+      "src/main/lib/multi-project-prompt.ts"
+    ],
+    "note": "Dedicated string truncation utilities — original expected files had only inline single-line truncation as a secondary concern"
+  },
+  {
+    "id": "loading-state-components",
+    "query": "component that shows a loading spinner or indicator",
+    "type": "duplicate_detection",
+    "expected": [
+      "src/renderer/components/ui/loading-state.tsx",
+      "src/renderer/components/ui/frink-loading-logo.tsx"
+    ]
+  },
+  {
+    "id": "error-state-hook",
+    "query": "React hook that reverts optimistic update on async mutation failure",
+    "type": "scattered_pattern",
+    "expected": [
+      "src/renderer/features/agents/main/active-chat/hooks/useSubChatRename.ts",
+      "src/renderer/features/agents/main/active-chat/hooks/useRollback.ts"
+    ],
+    "note": "Both hooks perform optimistic updates that revert on server error — useSubChatRename reverts chat name, useRollback reverts message history. Query refined from generic 'error state' to match actual codebase patterns."
+  },
+  {
+    "id": "negative-unrelated",
+    "query": "Rust memory allocator implementation",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5"
+  },
+  {
+    "id": "negative-too-generic",
+    "query": "utility function",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "no single file returned with similarity > 0.8"
+  },
+  {
+    "id": "retry-with-jitter",
+    "query": "calculate how long to wait before retrying after repeated failures, adding some randomness to avoid hammering a server",
+    "type": "paraphrase",
+    "expected": [
+      "src/main/lib/retry-backoff.ts"
+    ],
+    "note": "Paraphrase: query avoids 'exponential', 'backoff', 'jitter' — all core terms in the file. Tests synonym understanding."
+  },
+  {
+    "id": "terminal-buffering",
+    "query": "group rapid bursts of terminal text and forward them together to reduce the number of messages sent between processes",
+    "type": "paraphrase",
+    "expected": [
+      "src/main/lib/terminal/data-batcher.ts"
+    ],
+    "note": "Paraphrase: query avoids 'batch', 'IPC', 'flush' — all key terms in the file. 'group bursts' maps to batching, 'messages between processes' maps to IPC."
+  },
+  {
+    "id": "envelope-encryption",
+    "query": "protect a stored access token using two nested keys so the master key can be rotated without touching individual secrets",
+    "type": "paraphrase",
+    "expected": [
+      "src/main/lib/credential-crypto.ts"
+    ],
+    "note": "Paraphrase: query avoids 'DEK', 'KEK', 'AES-256-GCM', 'encrypt'. Describes the security property (key rotation), not the cryptographic mechanism."
+  },
+  {
+    "id": "unsaved-changes-guard",
+    "query": "show a confirmation prompt before letting the user switch chat contexts when the flow editor has pending edits",
+    "type": "paraphrase",
+    "expected": [
+      "src/renderer/hooks/use-dirty-nav-guard.ts"
+    ],
+    "note": "Paraphrase: query avoids 'dirty', 'atom', 'navigate'. Describes the UX behavior rather than the implementation concepts."
+  },
+  {
+    "id": "version-update-classifier",
+    "query": "check if a newer build is available and determine how significant the version change is to decide whether to prompt the user",
+    "type": "paraphrase",
+    "expected": [
+      "src/main/lib/auto-updater.ts"
+    ],
+    "note": "Paraphrase: query avoids 'autoUpdater', 'electron-updater', 'UpdateClass'. Describes the user-facing concern rather than implementation."
+  },
+  {
+    "id": "concurrency-limiter",
+    "query": "prevent the JS heap from being exhausted when multiple chat sessions trigger agent executions simultaneously",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/socket/bounded-execute-handler.ts"
+    ],
+    "note": "Low-lexical-overlap: query uses 'heap exhausted', 'multiple chat sessions' — file uses 'Semaphore', 'concurrency', 'semaphore.runExclusive'. Almost no shared vocabulary."
+  },
+  {
+    "id": "mcp-eager-load",
+    "query": "load MCP tool information eagerly after the app initializes so the settings screen opens without a loading state",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/renderer/hooks/use-mcp-background-prefetch.ts"
+    ],
+    "note": "Low-lexical-overlap: query uses 'eagerly', 'settings screen opens without loading' — file uses 'prefetch', 'PREFETCH_DELAY_MS', 'boot'. Tests behavioral vs implementation vocabulary."
+  },
+  {
+    "id": "git-diff-splitter",
+    "query": "split a patch comparing two code versions into separate per-file objects that include line change counts",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/git/diff-parser.ts"
+    ],
+    "note": "Low-lexical-overlap: query uses 'patch', 'code versions', 'per-file objects', 'line change counts' — file uses 'unified diff', 'hunk', 'ParsedDiffFile', 'splitUnifiedDiffByFile'."
+  },
+  {
+    "id": "stream-to-ui-events",
+    "query": "convert the raw message stream from the AI SDK into discrete typed events the renderer can display incrementally",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/claude/transform.ts"
+    ],
+    "note": "Low-lexical-overlap: query uses 'message stream', 'discrete typed events', 'incrementally' — file uses 'createTransformer', 'UIMessageChunk', 'generator', 'stream_event'."
+  },
+  {
+    "id": "auth-state-mismatch",
+    "query": "the OAuth redirect came back but the state token does not match any login attempt we issued",
+    "type": "error_symptom",
+    "expected": [
+      "src/main/lib/auth-state.ts"
+    ],
+    "note": "Error/symptom: query describes the failure condition ('state token does not match') — file contains the validation logic and 'Invalid or expired auth state' error."
+  },
+  {
+    "id": "credential-blob-corrupt",
+    "query": "decryption threw an error because the stored credential string has a malformed or corrupted structure",
+    "type": "error_symptom",
+    "expected": [
+      "src/main/lib/credential-crypto.ts"
+    ],
+    "note": "Error/symptom: query describes the runtime failure — file throws 'Invalid encrypted credential blob format'. Different angle from the paraphrase case."
+  },
+  {
+    "id": "agent-execution-timeout",
+    "query": "a handler has been running too long and the execution slot needs to be freed so queued requests can proceed",
+    "type": "error_symptom",
+    "expected": [
+      "src/main/lib/socket/bounded-execute-handler.ts"
+    ],
+    "note": "Error/symptom: query describes the timeout scenario — file implements timeout + forced semaphore release. Different angle from the concurrency-limiter case."
+  },
+  {
+    "id": "tool-permission-denied",
+    "query": "an agent tried to call a write or execute tool during a phase that only permits reading the project files",
+    "type": "error_symptom",
+    "expected": [
+      "src/main/lib/describe-repo-permission.ts"
+    ],
+    "note": "Error/symptom: query describes the permission violation — file enforces 'Only Read, Glob, Grep are allowed for description'."
+  },
+  {
+    "id": "pkce-verifier-lookup",
+    "query": "validate the OAuth state parameter and retrieve the associated PKCE code verifier",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/main/lib/auth-state.ts"
+    ],
+    "note": "Hard negative: auth-callback.ts is confusable — it also handles OAuth state but validates the full exchange (code + state). auth-state.ts does only the state/verifier lookup."
+  },
+  {
+    "id": "mcp-boot-prefetch",
+    "query": "proactively warm up the MCP tool list shortly after the application starts so it is ready before the user opens settings",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/renderer/hooks/use-mcp-background-prefetch.ts"
+    ],
+    "note": "Hard negative: use-mcp-import-invalidation.ts is confusable — both refresh MCP data, but invalidation is reactive (triggered by events) while prefetch is proactive (scheduled after boot)."
+  },
+  {
+    "id": "git-ipc-subscription",
+    "query": "subscribe the renderer to git repository change events for a specific project directory and forward them over IPC",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/main/lib/git/watcher/ipc-bridge.ts"
+    ],
+    "note": "Architectural/cross-layer query — connects filesystem watcher, git cache, IPC, and renderer state. Tests understanding of the IPC bridge pattern."
+  },
+  {
+    "id": "lsp-transport-bridge",
+    "query": "create a bidirectional message channel between the editor UI and the background language server process",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/main/lib/language-server/transports.ts"
+    ],
+    "note": "Architectural query: describes the cross-layer communication role rather than LSP protocol details."
+  },
+  {
+    "id": "flow-step-remote-execution",
+    "query": "receive a workflow execution step from the remote flow engine, run it locally in a shell, and send the result back",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/main/lib/flow-step-executor.ts"
+    ],
+    "note": "Architectural query: describes the orchestrator→local→orchestrator round-trip. Tests retrieval of cross-layer execution handlers."
+  },
+  {
+    "id": "mcp-oauth-and-tools",
+    "query": "complete the OAuth authentication flow for an MCP server and make its tools available to the agent",
+    "type": "needle_in_haystack",
+    "expected": [
+      "src/main/lib/mcp-auth.ts"
+    ],
+    "note": "Architectural query: combines auth flow completion with tool discovery — the full integration responsibility of mcp-auth.ts."
+  },
+  {
+    "id": "negative-docker-config",
+    "query": "Docker container health check and restart policy configuration",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5"
+  },
+  {
+    "id": "negative-webgl-shader",
+    "query": "WebGL shader compilation and GPU buffer allocation",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5"
+  },
+  {
+    "id": "negative-sql-migration",
+    "query": "SQL migration adding a foreign key constraint with cascade delete",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5"
+  },
+
+  {
+    "id": "credential-encryption-duplicate",
+    "query": "encrypt and decrypt a secret value using AES-256-GCM with a separate key encryption key so the data key can be rotated independently",
+    "type": "duplicate_detection",
+    "expected": [
+      "src/main/lib/credential-crypto.ts",
+      "socket-server/src/lib/credential-crypto.ts"
+    ],
+    "note": "Cross-process duplicate: identical envelope encryption logic mirrored in main process and socket server. Cannot share via import (different Node.js processes). Tests detection of intentional cross-boundary duplication."
+  },
+
+  {
+    "id": "concurrency-slot-timeout",
+    "query": "free up a blocked execution slot after a handler has been running too long so other queued work can proceed",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/socket/bounded-execute-handler.ts"
+    ],
+    "note": "Low-lexical-overlap: different angle on bounded-execute-handler from the agent-execution-timeout error_symptom case. Query focuses on the timeout-release mechanism ('blocked slot', 'queued work') vs file's 'semaphore.runExclusive', 'timeoutPromise', 'releaseFunction'. Tests vocabulary generalization."
+  },
+
+  {
+    "id": "ipc-git-events-subscription",
+    "query": "allow the renderer to listen for file changes in a project's version control directory and receive updates as they happen",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/git/watcher/ipc-bridge.ts"
+    ],
+    "note": "Low-lexical-overlap: harder vocabulary variant of git-ipc-subscription. Query avoids 'IPC', 'git', 'watcher', 'subscribe' — uses 'version control directory', 'file changes', 'receive updates'. Tests that the describer captured the observable behavior rather than the implementation vocabulary."
+  },
+
+  {
+    "id": "bi-directional-lsp-transport",
+    "query": "open communication channels between the frontend renderer and a background process running a language analysis tool",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/language-server/transports.ts"
+    ],
+    "note": "Low-lexical-overlap: harder variant of lsp-transport-bridge. Avoids 'LSP', 'IPC', 'setupLanguageServerIPC'. Uses 'language analysis tool' for LSP, 'communication channels' for message forwarding. Tests understanding of the architectural role without protocol vocabulary."
+  },
+
+  {
+    "id": "execute-remote-workflow-step",
+    "query": "receive a task definition from the cloud platform, run its shell commands locally, and report back the results",
+    "type": "low_lexical_overlap",
+    "expected": [
+      "src/main/lib/flow-step-executor.ts"
+    ],
+    "note": "Low-lexical-overlap: harder variant of flow-step-remote-execution. Query uses 'task definition', 'shell commands', 'cloud platform' — file uses 'flow:execute-step', 'parseNodeOutput', 'Socket.io', 'structured stdout'. Domain (workflow orchestration) vs implementation (Socket.io protocol) mismatch."
+  },
+
+  {
+    "id": "optimistic-rename-rollback",
+    "query": "optimistically update a chat name in the UI, persist it to the server, and revert the local change if the save fails",
+    "type": "scattered_pattern",
+    "expected": [
+      "src/renderer/features/agents/main/active-chat/hooks/useSubChatRename.ts",
+      "src/renderer/features/agents/stores/sub-chat-store.ts"
+    ],
+    "note": "Scattered pattern: spans mutation hook (useSubChatRename — optimistic + revert on error) and store (sub-chat-store — holds the state being reverted). Query describes the user-visible transaction without mentioning Zustand, mutations, or stores."
+  },
+
+  {
+    "id": "editor-dirty-guard-navigation",
+    "query": "intercept navigation away from the workflow editor when there are unsaved changes and ask the user to confirm before switching",
+    "type": "scattered_pattern",
+    "expected": [
+      "src/renderer/hooks/use-dirty-nav-guard.ts"
+    ],
+    "note": "Scattered pattern + paraphrase: the guard hook reads dirty state from atoms set by the FlowEditor. Query describes the UX behavior (navigation interception, confirmation prompt) without mentioning atoms, Jotai, or 'dirty'."
+  },
+
+  {
+    "id": "git-change-notification-pipeline",
+    "query": "watch for file changes in a git repository, decide which ones are relevant, and push the updates to the renderer",
+    "type": "scattered_pattern",
+    "expected": [
+      "src/main/lib/git/watcher/git-watcher.ts",
+      "src/main/lib/git/watcher/ipc-bridge.ts"
+    ],
+    "note": "Scattered pattern: spans filesystem watcher (git-watcher — detects changes) and IPC bridge (ipc-bridge — filters relevant changes and dispatches to renderer). Query describes the pipeline behavior without naming any layer."
+  },
+
+  {
+    "id": "trpc-disconnect-integration-handler",
+    "query": "disconnectIntegration trpc proc handler local repo path",
+    "type": "exact_symbol_with_context",
+    "expected": [
+      "src/main/lib/trpc/routers/integrations.ts"
+    ],
+    "note": "Real-world failure mode (mined from session history): exact symbol `disconnectIntegration` wrapped in disambiguating prose. The same symbol exists in src/main/lib/cloud/integrations.ts (API client wrapper) — the agent wants the tRPC router handler. Tool returned the wrong file at #4. Description channel embeds prose, not symbol names; FTS5 AND-combine kills the BM25 path on verbose wrapping."
+  },
+
+  {
+    "id": "trpc-generate-webhook-endpoint",
+    "query": "generateWebhookEndpoint trpc procedure creates integration_webhooks row",
+    "type": "exact_symbol_with_context",
+    "expected": [
+      "src/main/lib/trpc/routers/integrations.ts"
+    ],
+    "note": "Real-world failure mode: exact tRPC procedure name `generateWebhookEndpoint` plus DB table name `integration_webhooks`. The procedure is at line 832 of integrations.ts. Tool returned createIntegrationWebhook from cloud/integrations.ts (different file, similar name) at #1."
+  },
+
+  {
+    "id": "user-integrations-repo-readers",
+    "query": "read user integrations from local SQLite repo besides router list",
+    "type": "concept_resolves_to_symbol",
+    "expected": [
+      "src/main/lib/db/repos/user-integrations.ts"
+    ],
+    "note": "Real-world failure mode: concept query that resolves to a specific repo file. The agent wants the repo (db/repos/user-integrations.ts) explicitly NOT the router (trpc/routers/integrations.ts). Tool's tangential semantic matches forced grep fallback in production."
+  },
+
+  {
+    "id": "crossmachine-flag-gates",
+    "query": "crossMachine flag gates socket.io connection and remote dispatch from cloud",
+    "type": "concept_with_constraint",
+    "expected": [
+      "src/main/lib/socket/client.ts"
+    ],
+    "note": "Real-world failure mode: concept (socket.io connection / remote dispatch) plus flag-gate constraint (`LAUNCH_FLAGS.crossMachine`). Tool returned usage sites (sendError, handleRemoteExecute) instead of the gate definitions. Multiple gate sites at lines 381, 753, 781, 797 of client.ts."
+  },
+
+  {
+    "id": "frink-mcp-launch-flag-gate",
+    "query": "frink flows MCP server registration for Claude agent gated by launch flag",
+    "type": "concept_with_constraint",
+    "expected": [
+      "src/main/lib/mcp/provider-config.ts"
+    ],
+    "note": "Real-world: concept (MCP server registration) + constraint (launch flag gate). Tool returned installFrinkMcpForClaude at #1 — provisional WIN, but description-channel didn't surface the launch-flag check. Tests whether the gate-clause meaningfully shifts ranking."
+  },
+
+  {
+    "id": "chat-data-shape-schema",
+    "query": "chat data shape with sandbox_id session_id stream_id messages",
+    "type": "concept_resolves_to_schema",
+    "expected": [
+      "src/main/lib/db/schema/index.ts"
+    ],
+    "note": "Real-world: concept (chat data shape) resolving to a Drizzle schema definition. The fields `session_id` and `stream_id` exist on the sub_chats table at lines 120-121. Tests whether the description channel surfaces a schema file when query mentions snake_case column names."
+  },
+
+  {
+    "id": "flows-mcp-tools-server-register",
+    "query": "register frink flows tools as MCP server for Claude agent SDK execution",
+    "type": "concept_with_constraint",
+    "expected": [
+      "src/main/lib/mcp/flows-tools/index.ts"
+    ],
+    "note": "Real-world: concept (MCP server) + specific subsystem (flows-tools). Tool likely returns generic MCP files. Tests whether the constraint `flows-tools` shifts ranking to the right MCP submodule."
+  },
+
+  {
+    "id": "negative-near-miss-state-sync",
+    "query": "synchronize application state between two browser tabs when localStorage changes",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.6",
+    "note": "Near-miss negative: plausible vocabulary (state sync, localStorage) overlaps with renderer storage code. Threshold raised to 0.6 after v6 showed frink's renderer genuinely uses localStorage, producing a 0.56 sim false positive at the original 0.5 threshold."
+  },
+
+  {
+    "id": "negative-near-miss-docker-compose",
+    "query": "define Docker Compose services for running a multi-container local development environment",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5",
+    "note": "Near-miss negative: infrastructure-specific. Frink may orchestrate services but does not define Docker Compose config. Tests rejection of DevOps/infra terminology."
+  },
+
+  {
+    "id": "negative-near-miss-websocket-multiplexing",
+    "query": "multiplex multiple independent message streams over a single WebSocket connection at the protocol level",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5",
+    "note": "Near-miss negative: frink uses Socket.io which abstracts multiplexing. Query vocabulary (multiplex, streams, WebSocket) overlaps with socket/IPC code but the specific concern (protocol-level muxing) is handled by the library, not app code. Tests rejection of queries that describe lower-level concerns than the codebase addresses."
+  },
+
+  {
+    "id": "negative-infra-kubernetes-helm",
+    "query": "generate Kubernetes manifests and Helm chart values for cloud deployment",
+    "type": "negative",
+    "expected": [],
+    "pass_condition": "top result similarity < 0.5",
+    "note": "Off-domain negative: pure infrastructure/DevOps. Frink does not generate K8s manifests. Tests rejection of deployment pipeline vocabulary."
+  }
+]

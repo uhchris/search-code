@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Per-repo state — created at runtime by `search-code index`
+.search-code/
+
+# SWE-PolyBench cloned worktrees + per-commit DBs (4+ GB) — re-clone via run.py
+benchmark/swe-poly/repos/
+
+# Raw bench logs
+benchmark/results/*-bench.log

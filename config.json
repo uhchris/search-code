@@ -1,0 +1,23 @@
+{
+  "models": {
+    "describer": "gemma4:26b",
+    "embedder": "embeddinggemma"
+  },
+  "ollama": {
+    "host": "http://localhost:11434"
+  },
+  "reranker": {
+    "enabled": false,
+    "model": "jinaai/jina-reranker-v1-turbo-en"
+  },
+  "hybrid": {
+    "enabled": true
+  },
+  "indexing": {
+    "sourceRoots": ["src", "socket-server/src"],
+    "excludePatterns": ["**/*.test.ts", "**/*.test.tsx", "**/*.d.ts", "**/node_modules/**", "**/cloned-projects/**", "**/*icons*.tsx", "**/*icon*.tsx", "**/canvas-icons.tsx"],
+    "minChunkLines": 5,
+    "maxChunkLines": 300,
+    "concurrency": 1
+  }
+}
