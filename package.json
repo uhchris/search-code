@@ -15,7 +15,6 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "openai": "^4.77.0",
     "oxc-parser": "0.127.0"
   },
   "devDependencies": {

@@ -1,20 +1,18 @@
-import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, appendFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
-import { openDb } from './store.js';
-import { initEmbedder } from './embedder.js';
+import { appendFileSync, readFileSync, writeFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { initDescriber } from './describer.js';
-import { search, type SearchOptions } from './search.js';
+import { initEmbedder } from './embedder.js';
+import { search } from './search.js';
 import type { SearchResult } from './store.js';
+import { getDb, openDb } from './store.js';
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const GROUND_TRUTH_PATH = path.join(__dirname, '..', 'benchmark', 'ground-truth.json');
-const PROJECT_ROOT = path.join(__dirname, '..', '..', '..', '..');
 
 // Model used purely for tokenization — cheapest available, no generation
 const TOKEN_COUNT_MODEL = 'claude-sonnet-4-6';
@@ -28,9 +26,9 @@ type TestType =
   | 'paraphrase'
   | 'low_lexical_overlap'
   | 'error_symptom'
-  | 'exact_symbol_with_context'    // Real-world failure: exact symbol mentioned in NL query
-  | 'concept_with_constraint'      // Real-world failure: concept + flag-gate / path-constraint
-  | 'concept_resolves_to_symbol'   // Real-world failure: concept that resolves to specific repo/symbol
+  | 'exact_symbol_with_context' // Real-world failure: exact symbol mentioned in NL query
+  | 'concept_with_constraint' // Real-world failure: concept + flag-gate / path-constraint
+  | 'concept_resolves_to_symbol' // Real-world failure: concept that resolves to specific repo/symbol
   | 'negative';
 
 interface GroundTruthCase {
@@ -53,10 +51,10 @@ interface CaseResult {
   semanticTopSim: number | null;
   semanticFiles: string[];
   semanticTokens: number;
-  grepRecall1: boolean | null;
-  grepRecall3: boolean | null;
-  grepFiles: string[];
-  grepTokens: number;
+  bm25Recall1: boolean | null;
+  bm25Recall3: boolean | null;
+  bm25Files: string[];
+  bm25Tokens: number;
   negativePassed: boolean | null;
   expected: string[];
 }
@@ -85,7 +83,9 @@ async function countTokens(content: string, label?: string): Promise<number> {
   const client = getAnthropicClient();
   if (!client) {
     const estimate = Math.ceil(content.length / 3.5);
-    debugLog(`\n⚠  countTokens ${label ? `(${label}) ` : ''}— no ANTHROPIC_API_KEY, using estimate`);
+    debugLog(
+      `\n⚠  countTokens ${label ? `(${label}) ` : ''}— no ANTHROPIC_API_KEY, using estimate`,
+    );
     debugLog(`   chars: ${content.length}  →  estimated tokens: ${estimate}`);
     return estimate;
   }
@@ -97,15 +97,21 @@ async function countTokens(content: string, label?: string): Promise<number> {
 
     // In file mode write the full content untruncated; console gets a 300-char preview
     const fullContent = content;
-    const preview = content.length > 300 ? content.slice(0, 300) + `\n... [${content.length - 300} more chars]` : content;
+    const preview =
+      content.length > 300
+        ? content.slice(0, 300) + `\n... [${content.length - 300} more chars]`
+        : content;
     debugLog(`\n┌─ countTokens request ${label ? `(${label})` : ''}`);
     debugLog(`│  model:   ${request.model}`);
     debugLog(`│  chars:   ${content.length}`);
-    debugLog(`│  messages: ${JSON.stringify(request.messages.map(m => ({ role: m.role, content_length: (m.content as string).length })))}`);
+    debugLog(
+      `│  messages: ${JSON.stringify(request.messages.map((m) => ({ role: m.role, content_length: (m.content as string).length })))}`,
+    );
     if (debugFilePath) {
       // Full content in the file
       appendFileSync(debugFilePath, `│  content (full):\n`, 'utf8');
-      for (const line of fullContent.split('\n')) appendFileSync(debugFilePath, `│    ${line}\n`, 'utf8');
+      for (const line of fullContent.split('\n'))
+        appendFileSync(debugFilePath, `│    ${line}\n`, 'utf8');
     } else {
       // Preview on console only
       console.log(`│  content preview:`);
@@ -122,7 +128,9 @@ async function countTokens(content: string, label?: string): Promise<number> {
     return result.input_tokens;
   } catch (err) {
     const estimate = Math.ceil(content.length / 3.5);
-    debugLog(`  countTokens ERROR (${label}): ${(err as Error).message} — falling back to estimate ${estimate}`);
+    debugLog(
+      `  countTokens ERROR (${label}): ${(err as Error).message} — falling back to estimate ${estimate}`,
+    );
     return estimate;
   }
 }
@@ -131,75 +139,129 @@ async function countTokens(content: string, label?: string): Promise<number> {
 function formatSemanticContext(hits: SearchResult[], projectRoot: string): string {
   if (hits.length === 0) return '(no results)';
 
-  return hits.map((h, i) => {
-    // Read actual chunk lines from disk — this is exactly what the agent receives
-    let chunkText = '';
-    try {
-      const lines = readFileSync(path.join(projectRoot, h.filePath), 'utf8').split('\n');
-      chunkText = lines.slice(h.startLine - 1, h.endLine).join('\n');
-    } catch {
-      chunkText = h.description;
-    }
-    return [
-      `[${i + 1}] ${h.filePath}:${h.startLine}-${h.endLine} (similarity: ${h.similarity.toFixed(2)})`,
-      `Description: ${h.description}`,
-      '```',
-      chunkText,
-      '```',
-    ].join('\n');
-  }).join('\n\n');
+  return hits
+    .map((h, i) => {
+      // Read actual chunk lines from disk — this is exactly what the agent receives
+      let chunkText = '';
+      try {
+        const lines = readFileSync(path.join(projectRoot, h.filePath), 'utf8').split('\n');
+        chunkText = lines.slice(h.startLine - 1, h.endLine).join('\n');
+      } catch {
+        chunkText = h.description;
+      }
+      return [
+        `[${i + 1}] ${h.filePath}:${h.startLine}-${h.endLine} (similarity: ${h.similarity.toFixed(2)})`,
+        `Description: ${h.description}`,
+        '```',
+        chunkText,
+        '```',
+      ].join('\n');
+    })
+    .join('\n\n');
 }
 
-// Format grep output the way an agent would receive it (rg with 3 lines context).
-// Uses the single longest non-stop keyword — a competent agent picks one precise
-// term rather than running three separate searches, which was inflating grep tokens.
-function formatGrepContext(query: string, projectRoot: string): { files: string[]; text: string } {
-  const stopWords = new Set([
-    'a', 'an', 'the', 'that', 'this', 'is', 'are', 'was', 'were', 'be', 'been',
-    'being', 'have', 'has', 'had', 'do', 'does', 'did', 'for', 'and', 'or',
-    'but', 'in', 'on', 'at', 'to', 'of', 'as', 'by', 'with', 'from', 'into',
-    'like', 'such', 'based', 'can', 'will', 'would', 'could', 'should',
-    'function', 'return', 'const', 'let', 'var',
-  ]);
+// Format BM25 baseline results in the same shape as semantic results so token
+// counts are an apples-to-apples comparison. The lexical retriever is
+// SQLite FTS5 with `porter unicode61` stemming + IDF over the indexed corpus —
+// identical to the sparse channel used inside `searchHybrid`. No hand-rolled
+// stopwords, no toy stemmer, no NL→grep guessing: the question this benchmark
+// now answers is "how much does semantic add over the best lexical retriever
+// the repo can build from the same index?".
+interface Bm25Hit {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  description: string | null;
+  rank: number;
+}
 
-  const words = query
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+// OR-joined FTS5 BM25 query. Note: this differs from `searchByCodeBm25` in
+// store.ts, which AND-joins terms. AND-join is the right call for the *hybrid
+// composition* (where dense channels protect recall and BM25 is asked to be
+// precise) — but for a *standalone lexical baseline* it is too strict and
+// returns 0 hits on most NL queries. OR-join is the default behaviour of
+// Lucene/Elasticsearch and is therefore the apples-to-apples lexical
+// comparator for this benchmark.
+function fetchBm25Hits(query: string, limit: number): Bm25Hit[] {
+  const tokens = query
+    .replace(/["*()^]/g, ' ')
+    .trim()
     .split(/\s+/)
-    .filter((w) => w.length >= 4 && !stopWords.has(w));
+    .filter((w) => w.length >= 3);
+  if (tokens.length === 0) return [];
+  const ftsQuery = tokens.join(' OR ');
 
-  if (words.length === 0) return { files: [], text: '(no grep results)' };
-
-  // Pick the single longest keyword — longer = more discriminating, fewer false hits
-  const keyword = words.slice().sort((a, b) => b.length - a.length)[0]!;
-
-  const fileHits = new Map<string, number>();
-
-  let output = '';
+  let rows: Array<{
+    rowid: number;
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    description: string | null;
+  }>;
   try {
-    output = execSync(
-      `rg -n --context=3 --type-add 'code:*.{ts,tsx,js,jsx,py,go,rs}' -t code -i "${keyword}" "${projectRoot}/src" "${projectRoot}/socket-server/src" 2>/dev/null | head -200 || true`,
-      { encoding: 'utf8', timeout: 10_000 },
-    );
-  } catch { /* silently skip */ }
-
-  if (!output.trim()) return { files: [], text: '(no grep results)' };
-
-  const text = `# grep: "${keyword}"\n${output.trim()}`;
-
-  for (const line of output.split('\n')) {
-    const m = line.match(/^([^:]+):\d+:/);
-    if (m) {
-      const rel = path.relative(projectRoot, m[1]);
-      fileHits.set(rel, (fileHits.get(rel) ?? 0) + 1);
-    }
+    rows = getDb()
+      .prepare(
+        `SELECT cf.rowid AS rowid, c.file_path, c.start_line, c.end_line, c.description
+         FROM chunks_code_fts cf
+         JOIN chunks c ON c.id = cf.rowid
+         WHERE cf.content MATCH ?
+         ORDER BY -bm25(chunks_code_fts) DESC
+         LIMIT ?`,
+      )
+      .all(ftsQuery, limit * 4) as Array<{
+      rowid: number;
+      file_path: string;
+      start_line: number;
+      end_line: number;
+      description: string | null;
+    }>;
+  } catch {
+    return [];
   }
 
-  const files = [...fileHits.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([f]) => f);
+  // Dedupe by file_path; recall in the benchmark is measured at file level.
+  const hits: Bm25Hit[] = [];
+  const seenPaths = new Set<string>();
+  let rank = 0;
+  for (const row of rows) {
+    if (seenPaths.has(row.file_path)) continue;
+    seenPaths.add(row.file_path);
+    rank++;
+    hits.push({
+      filePath: row.file_path,
+      startLine: row.start_line,
+      endLine: row.end_line,
+      description: row.description,
+      rank,
+    });
+    if (hits.length === limit) break;
+  }
+  return hits;
+}
 
-  return { files, text };
+function formatBm25Context(
+  hits: Bm25Hit[],
+  projectRoot: string,
+): { files: string[]; text: string } {
+  if (hits.length === 0) return { files: [], text: '(no bm25 results)' };
+
+  const text = hits
+    .map((h, i) => {
+      let chunkText = '';
+      try {
+        const lines = readFileSync(path.join(projectRoot, h.filePath), 'utf8').split('\n');
+        chunkText = lines.slice(h.startLine - 1, h.endLine).join('\n');
+      } catch {
+        chunkText = h.description ?? '';
+      }
+      const header = `[${i + 1}] ${h.filePath}:${h.startLine}-${h.endLine} (bm25 rank: ${h.rank})`;
+      return h.description
+        ? [header, `Description: ${h.description}`, '```', chunkText, '```'].join('\n')
+        : [header, '```', chunkText, '```'].join('\n');
+    })
+    .join('\n\n');
+
+  return { files: hits.map((h) => h.filePath), text };
 }
 
 // ─── Recall helpers ───────────────────────────────────────────────────────────
@@ -258,13 +320,14 @@ function renderResults(results: CaseResult[], usingRealTokenizer: boolean): void
       if (r.semanticFiles.length > 0) {
         console.log(`    Files: ${r.semanticFiles.slice(0, 3).join(', ')}`);
       }
-      console.log(`  Grep     → R@1 ${checkmark(r.grepRecall1)}  R@3 ${checkmark(r.grepRecall3)}`);
+      console.log(`  BM25     → R@1 ${checkmark(r.bm25Recall1)}  R@3 ${checkmark(r.bm25Recall3)}`);
 
-      if (r.semanticTokens > 0 || r.grepTokens > 0) {
-        const saved = r.grepTokens - r.semanticTokens;
-        const note = r.grepTokens > 0
-          ? `Semantic ${r.semanticTokens} tok | Grep ${r.grepTokens} tok | Saved ${Math.max(0, saved)} tok`
-          : `Semantic ${r.semanticTokens} tok | Grep: not found`;
+      if (r.semanticTokens > 0 || r.bm25Tokens > 0) {
+        const saved = r.bm25Tokens - r.semanticTokens;
+        const note =
+          r.bm25Tokens > 0
+            ? `Semantic ${r.semanticTokens} tok | BM25 ${r.bm25Tokens} tok | Saved ${Math.max(0, saved)} tok`
+            : `Semantic ${r.semanticTokens} tok | BM25: not found`;
         console.log(`  Tokens   → ${note}`);
       }
     }
@@ -277,17 +340,17 @@ function renderResults(results: CaseResult[], usingRealTokenizer: boolean): void
   const posR1 = positives.filter((r) => r.semanticRecall1).length;
   const posR3 = positives.filter((r) => r.semanticRecall3).length;
   const posR5 = positives.filter((r) => r.semanticRecall5).length;
-  const grepR1 = positives.filter((r) => r.grepRecall1).length;
-  const grepR3 = positives.filter((r) => r.grepRecall3).length;
+  const bm25R1 = positives.filter((r) => r.bm25Recall1).length;
+  const bm25R3 = positives.filter((r) => r.bm25Recall3).length;
   const negPass = negatives.filter((r) => r.negativePassed).length;
   const totalPos = positives.length;
   const totalNeg = negatives.length;
 
   console.log(
-    `Positive Recall@1: ${posR1}/${totalPos} (${pct(posR1, totalPos)}%)    Grep @1: ${grepR1}/${totalPos} (${pct(grepR1, totalPos)}%)`,
+    `Positive Recall@1: ${posR1}/${totalPos} (${pct(posR1, totalPos)}%)    BM25 @1: ${bm25R1}/${totalPos} (${pct(bm25R1, totalPos)}%)`,
   );
   console.log(
-    `Positive Recall@3: ${posR3}/${totalPos} (${pct(posR3, totalPos)}%)    Grep @3: ${grepR3}/${totalPos} (${pct(grepR3, totalPos)}%)`,
+    `Positive Recall@3: ${posR3}/${totalPos} (${pct(posR3, totalPos)}%)    BM25 @3: ${bm25R3}/${totalPos} (${pct(bm25R3, totalPos)}%)`,
   );
   console.log(`Positive Recall@5: ${posR5}/${totalPos} (${pct(posR5, totalPos)}%)`);
 
@@ -300,12 +363,12 @@ function renderResults(results: CaseResult[], usingRealTokenizer: boolean): void
   }
 
   const semTok = positives.reduce((s, r) => s + r.semanticTokens, 0);
-  const grepTok = positives.reduce((s, r) => s + r.grepTokens, 0);
-  if (semTok > 0 || grepTok > 0) {
+  const bm25Tok = positives.reduce((s, r) => s + r.bm25Tokens, 0);
+  if (semTok > 0 || bm25Tok > 0) {
     const avgSem = totalPos > 0 ? Math.round(semTok / totalPos) : 0;
-    const avgGrep = totalPos > 0 ? Math.round(grepTok / totalPos) : 0;
+    const avgBm25 = totalPos > 0 ? Math.round(bm25Tok / totalPos) : 0;
     console.log(
-      `Avg tokens/query: Semantic ${avgSem} | Grep ${avgGrep} | Delta ${Math.max(0, avgGrep - avgSem)}`,
+      `Avg tokens/query: Semantic ${avgSem} | BM25 ${avgBm25} | Delta ${Math.max(0, avgBm25 - avgSem)}`,
     );
   }
 }
@@ -316,7 +379,10 @@ function pct(n: number, total: number): number {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export async function runBenchmark(projectRoot: string, opts: { debug?: boolean; debugFile?: string } = {}): Promise<void> {
+export async function runBenchmark(
+  projectRoot: string,
+  opts: { debug?: boolean; debugFile?: string } = {},
+): Promise<void> {
   debugMode = opts.debug ?? false;
   debugFilePath = opts.debugFile ?? null;
 
@@ -366,11 +432,11 @@ export async function runBenchmark(projectRoot: string, opts: { debug?: boolean;
 
     const semanticFiles = semanticHits.map((h) => h.filePath);
 
-    // ── Grep baseline ──
-    const { files: grepFiles, text: grepContext } = formatGrepContext(tc.query, projectRoot);
-    const grepTokens = grepContext !== '(no grep results)'
-      ? await countTokens(grepContext, `grep/${tc.id}`)
-      : 0;
+    // ── BM25 baseline (FTS5 porter unicode61 over rawCode) ──
+    const bm25Hits = fetchBm25Hits(tc.query, 5);
+    const { files: bm25Files, text: bm25Context } = formatBm25Context(bm25Hits, projectRoot);
+    const bm25Tokens =
+      bm25Context !== '(no bm25 results)' ? await countTokens(bm25Context, `bm25/${tc.id}`) : 0;
 
     // ── Compute metrics ──
     let result: CaseResult;
@@ -386,25 +452,41 @@ export async function runBenchmark(projectRoot: string, opts: { debug?: boolean;
       }
 
       result = {
-        id: tc.id, type: tc.type, query: tc.query,
-        semanticRecall1: null, semanticRecall3: null, semanticRecall5: null,
+        id: tc.id,
+        type: tc.type,
+        query: tc.query,
+        semanticRecall1: null,
+        semanticRecall3: null,
+        semanticRecall5: null,
         semanticMrr: null,
-        semanticTopSim, semanticFiles, semanticTokens,
-        grepRecall1: null, grepRecall3: null, grepFiles, grepTokens,
-        negativePassed, expected: tc.expected,
+        semanticTopSim,
+        semanticFiles,
+        semanticTokens,
+        bm25Recall1: null,
+        bm25Recall3: null,
+        bm25Files,
+        bm25Tokens,
+        negativePassed,
+        expected: tc.expected,
       };
     } else {
       result = {
-        id: tc.id, type: tc.type, query: tc.query,
+        id: tc.id,
+        type: tc.type,
+        query: tc.query,
         semanticRecall1: recall(semanticFiles, tc.expected, 1),
         semanticRecall3: recall(semanticFiles, tc.expected, 3),
         semanticRecall5: recall(semanticFiles, tc.expected, 5),
         semanticMrr: mrr(semanticFiles, tc.expected, 10),
-        semanticTopSim, semanticFiles, semanticTokens,
-        grepRecall1: recall(grepFiles, tc.expected, 1),
-        grepRecall3: recall(grepFiles, tc.expected, 3),
-        grepFiles, grepTokens,
-        negativePassed: null, expected: tc.expected,
+        semanticTopSim,
+        semanticFiles,
+        semanticTokens,
+        bm25Recall1: recall(bm25Files, tc.expected, 1),
+        bm25Recall3: recall(bm25Files, tc.expected, 3),
+        bm25Files,
+        bm25Tokens,
+        negativePassed: null,
+        expected: tc.expected,
       };
 
       const r3count = recallCount(semanticFiles, tc.expected, 3);

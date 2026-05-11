@@ -64,15 +64,15 @@ The bench was expanded in v11 with 7 cases from production session logs covering
 
 Real-world failure-mode coverage: 4/7 R@1, 7/7 R@3, 9/10 R@5 across all user-reported missed-query patterns (vs 2/7, 4/7, 5/7 on v6 baseline).
 
-**vs grep baseline** (single-call `rg` with the longest keyword from each query — fair single-shot grep, not multi-call agent grep):
+**vs BM25 baseline** (SQLite FTS5 with `porter unicode61` stemming + IDF, OR-joined like Lucene/Elasticsearch defaults — the same lexical retriever used as the sparse channel inside `searchHybrid`):
 
-| Metric | searchCode (v17b) | grep | Δ |
+| Metric | searchCode (v17b) | BM25 | Δ |
 |---|---|---|---|
-| R@1 | 28/40 (70%) | 1/40 (3%) | **+67pp** |
-| R@3 | 35/40 (88%) | 4/40 (10%) | **+78pp** |
-| Avg tokens/query | 2,504 | 5,174 | **−52%** |
+| R@1 | 28/40 (70%) | 12/40 (30%) | **+40pp** |
+| R@3 | 34/40 (85%) | 19/40 (48%) | **+37pp** |
+| Avg tokens/query | 1,280 | 934 | +37% |
 
-searchCode is 23× better at finding the right file at rank 1 on conceptual queries AND 2× cheaper per call. Grep wins on literal-token queries where you already know the verbatim identifier — the MCP tool description explicitly routes those to grep.
+BM25 (porter stemmer + IDF + identifier splits via `augmentForFts5`) is a far stronger lexical baseline than the previous hand-rolled NL→grep approximation it replaces. Semantic retrieval still wins on R@1 by a ~2× margin — driven mostly by paraphrase and low-lexical-overlap queries where vocabulary in the query does not overlap with vocabulary in the matching file. BM25 pulls ahead only when the query contains the exact identifier or near-verbatim string; the MCP tool description explicitly routes those cases to `grep`.
 
 See `benchmark/results/` for the full development arc including 5 reverted experiments documented as anti-patterns.
 

@@ -88,7 +88,7 @@ Internal and claude-context optimize for different jobs:
 
 **Internal's LLM-description architecture is the right choice for internal's use case.** The 7x indexing cost buys 18pp R@1 on internal bench and 8.4pp R@1 on SWE-poly agent. Description embeddings cluster duplicates AND rank paraphrase/error/scattered cases better.
 
-This does NOT prove "internal > claude-context" — we ran their *embed-text* design choice in our stack, not their full binary. They'd score differently with their Milvus+OpenAI defaults on a code-search-only benchmark. But within internal's stack and for internal's job, descriptions win.
+This does NOT prove "internal > claude-context" — we ran their *embed-text* design choice in our stack, not their full binary. They'd score differently with their default stack on a code-search-only benchmark. But within internal's stack and for internal's job, descriptions win.
 
 ## Implementation status (post-revert)
 

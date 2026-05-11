@@ -1,7 +1,6 @@
-import { fileURLToPath } from 'url';
-import path from 'path';
 import fs from 'fs';
-import OpenAI from 'openai';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -35,7 +34,7 @@ function loadConfig(): Config {
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let client: OpenAI | null = null;
+let ollamaHost: string | null = null;
 let embedderModel: string | null = null;
 let queryPrefix: string = '';
 let documentPrefix: string = '';
@@ -49,21 +48,20 @@ let documentPrefix: string = '';
 //     on our LLM-generated NL descriptions. Do not retry for description channel.
 
 export function initEmbedder(): void {
-  if (client) return;
+  if (embedderModel) return;
 
   const config = loadConfig();
   embedderModel = config.models.embedder;
+  ollamaHost = config.ollama.host;
 
   // EmbeddingGemma requires task-specific prefixes for full retrieval quality.
   // Other models (mxbai-embed-large, nomic-embed-text) work without prefixes.
   const isEmbeddingGemma = embedderModel.toLowerCase().includes('embeddinggemma');
-  queryPrefix = config.models.embedderPrompts?.query ?? (isEmbeddingGemma ? 'task: search result | query: ' : '');
-  documentPrefix = config.models.embedderPrompts?.document ?? (isEmbeddingGemma ? 'title: none | text: ' : '');
-
-  client = new OpenAI({
-    baseURL: `${config.ollama.host}/v1`,
-    apiKey: 'ollama',
-  });
+  queryPrefix =
+    config.models.embedderPrompts?.query ??
+    (isEmbeddingGemma ? 'task: search result | query: ' : '');
+  documentPrefix =
+    config.models.embedderPrompts?.document ?? (isEmbeddingGemma ? 'title: none | text: ' : '');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,8 +70,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Calls Ollama's native embed endpoint directly. Same transport pattern as
+// describer.ts — no SDK dependency, matches the rest of the repo.
 async function embedRaw(text: string): Promise<Float32Array> {
-  if (!client || !embedderModel) {
+  if (!embedderModel || !ollamaHost) {
     throw new Error('Embedder not initialized. Call initEmbedder() first.');
   }
 
@@ -82,11 +82,18 @@ async function embedRaw(text: string): Promise<Float32Array> {
 
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
     try {
-      const response = await client.embeddings.create({
-        model: embedderModel,
-        input: text,
+      const res = await fetch(`${ollamaHost}/api/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: embedderModel, input: text }),
       });
-      return new Float32Array(response.data[0].embedding);
+      if (!res.ok) throw new Error(`Ollama embed API error: ${res.status} ${res.statusText}`);
+
+      const json = (await res.json()) as { embeddings?: number[][]; error?: string };
+      if (json.error) throw new Error(json.error);
+      const vec = json.embeddings?.[0];
+      if (!vec || vec.length === 0) throw new Error('Ollama embed returned empty embedding');
+      return new Float32Array(vec);
     } catch (err) {
       lastError = err;
       if (attempt < RETRIES) await sleep(1000);
