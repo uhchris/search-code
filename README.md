@@ -1,122 +1,111 @@
-# semantic-search
+# search-code
 
-A local semantic code search tool for AI agents. Given a natural language query, it finds the most relevant files in your codebase and returns ranked file paths in ~2,000 tokens instead of the 20,000–50,000 tokens a grep-based agent typically burns.
+Local semantic + lexical code search for AI agents. Resolves natural-language queries to 1–5 ranked code chunks in ~200ms, all on-device via [Ollama](https://ollama.com). Production architecture is a 3-channel hybrid retriever (description embedding + code embedding + BM25 with identifier splits) fused via Reciprocal Rank Fusion.
 
-Runs entirely on your machine via [Ollama](https://ollama.com). No cloud APIs, no data leaves your environment.
+Runs entirely on your machine. No cloud APIs, no data leaves your environment.
 
 ---
 
 ## Why
 
-AI coding agents find code one of two ways: grep/find through the filesystem, or read files they already know about. Both work, but both are expensive. A grep-based agent on a medium-sized codebase routinely burns 20k–70k tokens locating the right file before it can even start the actual task.
+AI coding agents find code two ways: grep through the filesystem, or read files they already know about. Both are expensive. A grep-based agent on a medium-sized codebase routinely burns 20k–300k tokens locating the right file before it can do the actual task.
 
-The less obvious problem is what happens when the agent *doesn't* find the right file. It writes the code anyway, from scratch. Utility functions get reimplemented, hooks get duplicated, test helpers are written twice. Over time, agents operating without good code search produce codebases full of near-identical logic spread across files, none of which knows the others exist. This is harder to fix than the token cost.
+The less obvious cost: when the agent doesn't find the right file, it writes the code anyway, from scratch. Utility functions get reimplemented, hooks get duplicated, test helpers are written twice. Over time, agents operating without good code search produce codebases full of near-identical logic spread across files, none of which knows the others exist. Harder to fix than the token cost.
 
-This tool gives agents a semantic search tool call that resolves to 1–5 ranked file paths in a single round trip. In benchmarks on real GitHub bug reports (SWE-PolyBench), this reduces token consumption by **~94%** with equal or better accuracy, and gives the agent a fighting chance of finding what already exists before writing something new.
+This tool gives agents a `searchCode` MCP tool that returns ranked chunks (file path + symbol + actual source code) in a single round trip.
+
+On the production benchmark (SWE-PolyBench Verified, agent mode, n=24 instances): **R@1 19/24 (79%) at 226K avg tokens/instance vs grep-agent 15/18 (83%) at 308K tokens — same recall at 32% lower cost.**
 
 ---
 
 ## How it works
 
-**Indexing** (one-time, runs locally):
+**Indexing** (one-time per repo, then incremental):
 
-1. **Chunk** - the codebase is parsed using the TypeScript/JavaScript AST (via [oxc-parser](https://github.com/oxc-project/oxc)). Each function, class, and exported constant becomes its own chunk. Boundaries follow real code structure, not arbitrary line counts.
+1. **Chunk** — parse via [oxc-parser](https://github.com/oxc-project/oxc). Each function, class, exported variable, and tRPC-router-style sub-procedure becomes its own chunk. Drizzle table definitions are chunked. Boundaries follow real code structure.
+2. **Describe** — each chunk is passed to a local LLM (default: `gemma4:26b`) which writes 2–3 sentences explaining what the code does, the domain, and key constraints. Bridges the vocabulary gap between query intent and code identifiers.
+3. **Embed twice**:
+   - The description (prefixed with `filePath [symbol]:`) is embedded → stored as `embedding` BLOB
+   - The raw code is embedded directly → stored as `code_embedding` BLOB
+4. **Index for BM25** — rawCode is appended with Lucene `WordDelimiterGraphFilter`–style identifier splits (`disconnectIntegration` → `disconnectIntegration disconnect Integration`) into a SQLite FTS5 table.
 
-2. **Describe** - each chunk is passed to a local LLM (default: `gemma4:26b` via Ollama) which writes a natural language description of what the code does. This bridges the vocabulary gap between how developers describe problems and how code is written.
+All state lives in `.search-code/index.db` next to your `search-code.config.json`.
 
-3. **Embed** - the description (prefixed with file path and symbol name) is embedded using a local embedding model (default: `embeddinggemma`). Embeddings are stored in a local SQLite database alongside the raw chunk and description.
+**Search** (per query):
 
-**Search** (at query time):
+1. Query is embedded once.
+2. Three independent rankings computed in parallel:
+   - **desc**: cosine vs description embedding (paraphrase strength)
+   - **code**: cosine vs code embedding (code-shape semantics)
+   - **bm25**: FTS5 BM25 over rawCode + identifier splits (literal lexical match)
+3. Ranks fused via Reciprocal Rank Fusion (K=60). Each chunk emits one row per channel that ranked it; rows sorted by channel-internal rank.
+4. Agent sees: file path + line range + symbol + per-channel rank tags (`desc:#3 code:#1 bm25:#--`) + full chunk source.
 
-1. The query is embedded using the same model.
-2. Cosine similarity is computed against all chunk embeddings.
-3. Results are deduplicated by file path and code hash, then returned as ranked file paths with descriptions.
+Round-trip latency on a 6,000-chunk index: ~150ms.
 
-The whole search round trip takes ~200ms once the index is built.
+**Incremental re-indexing** runs automatically. Each `searchCode` MCP call triggers a debounced background re-index (30s debounce, mtime-gated Phase 0 — files whose disk mtime hasn't advanced are skipped entirely). LLM cost is paid only for chunks of files that genuinely changed. `search-code status` shows whether a background pass is currently writing.
 
 ---
 
 ## Benchmarks
 
-### Internal codebase (33 test cases across 6 query types)
+### Frink internal (40 real-world failure-mode cases, mined from session history)
 
-Tested on a ~500-file TypeScript/React/Node codebase. Query types include paraphrase, low-lexical-overlap (vocabulary gap between query and code), scattered patterns, duplicate detection, needle-in-haystack, and error symptom queries.
+The bench was expanded in v11 with 7 cases from production session logs covering three failure types: same-file multi-chunk (Mode 1), generic plumbing descriptions (Mode 2), and concept-with-constraint queries.
 
 | Version | R@1 | R@3 | R@5 | MRR@10 |
 |---------|-----|-----|-----|--------|
-| v1 (baseline) | 60% | 92% | 92% | 0.740 |
-| v2 (hybrid BM25) | 64% | 88% | 88% | 0.760 |
-| v3 (metadata prefix) | 76% | 92% | 96% | 0.843 |
-| v5 (contextual retrieval) | 84% | 92% | 96% | 0.883 |
-| **v6 (codeHash deduplication)** | **79%** | **91%** | **94%** | **0.846** |
+| v6 baseline (description embed + BM25 + RRF) | 68% | 85% | 90% | 0.764 |
+| v14 (+ chunker fixes: Drizzle, exported decls, per-property tRPC) | 70% | 88% | 88% | 0.787 |
+| v15 (+ Lucene WDG identifier splits in FTS5) | 70% | 88% | 88% | 0.783 |
+| **v17b (+ code-channel embedding + per-channel-entry MCP rendering)** | **70%** | **88%** | **98%** | **0.800** |
 
-> v6 is lower than v5 because the benchmark was expanded from 25 to 33 harder cases. On the original 25 cases, v6 is flat with v5 at 84% R@1.
+**v17b vs v6:** R@1 +2pp, R@3 +3pp, R@5 +8pp, MRR +0.036.
 
-**In plain English:** given a natural language description of what you're looking for, the correct file is the top result 79% of the time. It appears somewhere in the top 5 results 94% of the time.
+Real-world failure-mode coverage: 4/7 R@1, 7/7 R@3, 9/10 R@5 across all user-reported missed-query patterns (vs 2/7, 4/7, 5/7 on v6 baseline).
 
----
+See `benchmark/results/` for the full development arc including 5 reverted experiments documented as anti-patterns.
 
-### SWE-PolyBench (real GitHub bug reports, external repos)
+### SWE-PolyBench Verified (real GitHub bug reports)
 
-Tested on [SWE-PolyBench Verified](https://huggingface.co/datasets/AmazonScience/SWE-PolyBench_Verified), which contains real GitHub issues from open-source JS/TS repos with known correct file patches. These are queries neither we nor the tool have seen before.
+Tested on [SWE-PolyBench Verified](https://huggingface.co/datasets/AmazonScience/SWE-PolyBench_Verified) — real GitHub issues from open-source JS/TS repos with known correct file patches. Queries the tool has never seen.
 
-#### Combined results (n=24: three.js + tailwindcss + prettier)
+**Non-agent mode** (`semantic` retriever passes full multi-paragraph problem_statement as query):
 
-| Retriever | R@1 | R@3 | R@5 |
-|-----------|-----|-----|-----|
-| Semantic (direct, v9 hybrid) | **35.4%** | **48.3%** | **59.4%** |
+| Repo | n | R@1 | R@3 | R@5 |
+|------|---|-----|-----|-----|
+| three.js | 4 | 3/4 | 4/4 | 4/4 |
+| prettier | 17 | 8/17 | 11/17 | 14/17 |
+| tailwindcss | 3 | 2/3 | 2/3 | 2/3 |
+| **TOTAL** | **24** | **13/24** | **17/24** | **20/24** |
 
-Earlier n=7 (three.js + tailwindcss) numbers: R@1=47.6%, R@5=61.9%, agent token savings 92%. R@1 dropped after adding prettier because prettier issue bodies often reference doc files (changelog, README, .yml) that the AST chunker does not index — those count as misses on absolute R@k. Source-only R@k stays much higher (50%+ R@1 on the source-gold subset).
+Identical to v9 baseline — bench methodology defeats every retrieval improvement equally because multi-paragraph queries starve all three channels (AND-combined FTS5 returns 0; both dense channels embed long English text to a blurry centroid).
 
-#### Per-repo breakdown
+**Agent mode** (`semantic-agent` — Claude Haiku 4.5 formulates short queries via the `searchCode` MCP tool):
 
-**three.js (n=4)** — agent + retrieval bench, see initial v6 results
+| | R@1 any-hit | Mean R@1 | Avg tokens | Avg turns |
+|---|---|---|---|---|
+| Non-agent CLI | 13/24 | 0.363 | n/a (single call) | n/a |
+| Semantic-agent (v16 short fmt) | 15/24 | 0.408 | 50K | 8.9 |
+| **Semantic-agent (v17b MCP fmt — shipped)** | **19/24 (79%)** | **0.506** | **226K** | **8.8** |
+| Grep-agent (n=18) | 15/18 (83%) | 0.540 | 308K | 14 |
 
-| Retriever | R@1 | R@5 | Avg tokens |
-|-----------|-----|-----|------------|
-| Semantic (direct) | 53.6% | 63.4% | n/a |
-| Semantic agent | 53.6% | 57.1% | 6,633 |
-| Grep agent | 53.6% | 57.1% | 105,494 |
+**v17b matches grep-agent's R@1 hit count at 32% lower token cost.**
 
-**tailwindcss (n=3)**
+Production-mode-relevant. The non-agent number under-measured the architecture: agents formulate short identifier-rich queries that exercise BM25 + code-channel properly; the bench's long-paragraph mode does not.
 
-| Retriever | R@1 | R@5 | Avg tokens |
-|-----------|-----|-----|------------|
-| Semantic (direct) | 41.7% | 58.3% | n/a |
-| Semantic agent | 41.7% | 66.7% | 7,259 |
-| Grep agent | 58.3% | 58.3% | 50,279 |
-
-**prettier (n=17)** — v9 retrieval only
-
-| Retriever | R@1 | R@3 | R@5 |
-|-----------|-----|-----|-----|
-| Semantic (direct, dense only) | 31.3% | 46.5% | 58.3% |
-| Semantic (direct, FTS5 hybrid) | 31.3% | 46.5% | 58.3% |
-| Semantic (direct, MiniSearch hybrid) | 31.3% | 46.5% | 58.3% |
-| Source-only subset (n=8) | **50.0%** | — | **87.5%** |
-
-Three runs (dense, FTS5 hybrid, MiniSearch hybrid) produced byte-identical results — BM25 contributed zero on prettier because issue-body queries are too verbose for AND-combine (every term must appear in target chunk → unsatisfied for every case). Documented in `benchmark/results/v9-swe-poly-prettier.md`.
-
-#### Known gaps
-
-**Non-indexed file types.** The AST chunker covers `.js`, `.ts`, `.tsx`, `.jsx`, `.mjs`, `.cjs` only. Two tailwind gold files are `css/preflight.css` and `yarn.lock` — neither indexed. The semantic agent exits early on these; the grep agent keeps burning tokens searching. This inflates token savings figures for cases with non-source gold files. Source-file-only token savings: **61%** on tailwindcss, **87%** on three.js.
-
-**Identifier-style queries (largely fixed in v9).** On tailwindcss-853 (`configurePlugins.js`), the grep agent succeeded where the semantic agent failed — grep searched the literal token `configurePlugins` and found it. v9 adds a sparse BM25 channel over rawCode (FTS5 by default, MiniSearch with code-aware tokenizer optional) fused via RRF — identifier-component queries like `useRollback hook` now hit at R@1. The remaining failure mode is **long verbose issue bodies** with zero token overlap to the (short) target file: AND-combine returns `[]`, dense channel can't bridge the vocabulary gap. This is a query-side problem, not a retrieval-side one — see "When to use vs grep" below.
-
-### When to use searchCode vs grep
+### Where searchCode wins vs grep
 
 | You want to find... | Use |
 |---|---|
 | A concept / behavior / domain ("where auth tokens are validated") | `searchCode` |
-| A function whose name you already know exactly (`configurePlugins`) | `grep` (faster, exact) |
+| A function whose verbatim name you already know | `grep` (faster, exact) |
 | An exact error string or log message | `grep` |
 | A file by name | `find` / glob |
-| Multiple related functions across a feature area | `searchCode` (single round trip) |
 | Paraphrased intent ("retry with backoff") | `searchCode` |
+| Compound identifier as separated words ("configure plugins" for `configurePlugins`) | `searchCode` (BM25 splits handle this) |
 
-`searchCode` saves ~94% tokens vs grep on conceptual queries where it is the right tool. For literal-string lookups it is worse than grep — agents should route by whether they already know the verbatim token.
-
-> n=7 total. Expanding to the full 200 JS/TS instances across 9 repos (mui/material-ui, sveltejs/svelte, serverless/serverless, microsoft/vscode, prettier/prettier, and more) is on the roadmap.
+The MCP tool description itself nudges this routing. Agents that know the verbatim token are told to grep.
 
 ---
 
@@ -124,67 +113,79 @@ Three runs (dense, FTS5 hybrid, MiniSearch hybrid) produced byte-identical resul
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org) 18+
+- [Node.js](https://nodejs.org) 18+ (or [Bun](https://bun.sh))
 - [Ollama](https://ollama.com) running locally
-- The following models pulled in Ollama:
+- Pull required models:
 
 ```bash
 ollama pull gemma4:26b
 ollama pull embeddinggemma
 ```
 
-### Install
+### Install globally
 
 ```bash
-cd .claude/tools/semantic-search
+git clone <this repo> ~/search-code   # or wherever
+cd ~/search-code
 npm install
 npm run build
+npm install -g .                      # symlinks search-code into PATH
 ```
 
-### Configure
+After this, `search-code` is available from any directory.
 
-Edit `config.json` to point at your source directories:
+### Initialise a repo
+
+```bash
+cd /path/to/your/repo
+search-code init        # writes search-code.config.json + creates .search-code/
+```
+
+Edit `search-code.config.json` to set source roots:
 
 ```json
 {
-  "models": {
-    "describer": "gemma4:26b",
-    "embedder": "embeddinggemma"
-  },
-  "ollama": {
-    "host": "http://localhost:11434"
-  },
+  "models": { "describer": "gemma4:26b", "embedder": "embeddinggemma" },
+  "ollama": { "host": "http://localhost:11434" },
+  "hybrid": { "enabled": true },
   "indexing": {
     "sourceRoots": ["src"],
-    "excludePatterns": ["**/*.test.ts", "**/*.d.ts", "**/node_modules/**"]
+    "excludePatterns": ["**/*.test.ts", "**/*.d.ts", "**/node_modules/**"],
+    "minChunkLines": 5,
+    "maxChunkLines": 300
   }
 }
 ```
 
-### Index your codebase
+### Initial index
 
 ```bash
-node dist/index.js index
+search-code index
 ```
 
-This runs once. Re-run after significant code changes. Progress is saved, so interrupted indexing resumes from where it left off.
+First run is slow because the LLM describes every chunk (~10–30 min on a 1,000-file repo). Subsequent runs are mtime-gated: unchanged files are skipped at the parse step (~3s Phase 0 on a 2,000-file repo with no changes). Only chunks of changed files pay the LLM cost.
 
-### Search
+### Search from CLI
 
 ```bash
-node dist/index.js search "function that retries with exponential backoff"
+search-code search "function that retries with exponential backoff"
+search-code search "configurePlugins" --limit 5 --format mcp
+search-code status      # shows total chunks + whether a background reindex is running
 ```
 
-### Use with an AI agent (MCP)
-
-The tool exposes a `searchCode` MCP tool that injects into any Anthropic API-compatible agent automatically via the included API proxy:
+### Use with Claude Code (MCP)
 
 ```bash
-node .claude/tools/api-proxy/dist/proxy.js
-# Point your agent at http://localhost:3031 instead of api.anthropic.com
+claude mcp add codebase "search-code serve"
 ```
 
-The agent gains a `searchCode` tool without any code changes. Every API request gets it transparently.
+Restart Claude Code. The `searchCode` tool is now available in every project that has a `search-code.config.json`. Each MCP call also fires a debounced background reindex, so your edits get reflected in the next search without you running `index` manually.
+
+Tail live progress when a background reindex is running:
+
+```bash
+tail -f .search-code/last-index.log
+```
 
 ---
 
@@ -192,21 +193,45 @@ The agent gains a `searchCode` tool without any code changes. Every API request 
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `models.describer` | `gemma4:26b` | Ollama model used to describe code chunks |
-| `models.embedder` | `embeddinggemma` | Ollama model used to embed descriptions. SOTA on MTEB(Code) <500M params (arXiv:2509.20354) — handles both prose and code. Already-tested alternatives that did NOT improve scores: `nomic-embed-text` (identical), `nomic-embed-text-code` (regressed) |
+| `models.describer` | `gemma4:26b` | Ollama model used to describe chunks |
+| `models.embedder` | `embeddinggemma` | Ollama embedding model — SOTA on MTEB(Code) <500M (arXiv:2509.20354). Tested alternatives: `nomic-embed-text` (identical), `nomic-embed-text-code` (regressed) |
 | `ollama.host` | `http://localhost:11434` | Ollama server URL |
+| `hybrid.enabled` | `true` | Enable 3-channel RRF. Disable for description-channel only |
 | `indexing.sourceRoots` | `["src"]` | Directories to index (relative to repo root) |
 | `indexing.excludePatterns` | see config | Glob patterns to skip |
-| `indexing.minChunkLines` | `5` | Ignore chunks smaller than this |
+| `indexing.minChunkLines` | `5` | Ignore unnamed chunks smaller than this |
 | `indexing.maxChunkLines` | `300` | Split chunks larger than this |
 | `indexing.concurrency` | `1` | Parallel describe+embed workers |
 
 ---
 
+## Architecture changes since v6 (commit history in `benchmark/results/`)
+
+| Version | Change | Outcome |
+|---------|--------|---------|
+| v6/v11 | Description embed + FTS5 BM25 + RRF | baseline |
+| v12 | Chunker: emit Drizzle/exported `VariableDeclaration` + per-property tRPC procedures | Mode 2 fix |
+| v13 | Per-property chunks tested | Mode 1 fix |
+| v14 | Manifest-as-prefix experiment **reverted** | hurt R@1 5pp |
+| v15 | Lucene `WordDelimiterGraphFilter` identifier splits in FTS5 | no measurable bench impact, real-world MCP gain |
+| **v17b** | Code embedding as **third RRF channel** + per-channel-entry MCP rendering | **R@5 +8pp, MRR +0.036, ship** |
+| v17c | Chunk-dedup winning-channel rendering **reverted** | hurt R@1 |
+| v18 | Snippet extraction **reverted** | fewer lines per result → more turns → more total tokens |
+
+Rejected experiments retained as documented anti-patterns (`benchmark/results/v12-manifest.md`, `v17c-chunk-dedup-winning-channel.md`, `v18-snippet-rejected.md`). Pattern: trimming what existing channels expose hurts agent retrieval; adding new orthogonal channels helps.
+
+---
+
 ## Roadmap
 
-- **Multi-language support** - the describer and embedder are language-agnostic; only the AST chunker is TypeScript-specific. Adding Python, Go, and Rust chunkers would extend the tool to any codebase.
-- **Larger benchmark** - expand SWE-PolyBench coverage beyond three.js (4 instances) to tailwindcss, code-server, and prettier across all 200 JS/TS verified instances.
-- **End-to-end agent benchmark** - measure not just token consumption to find the file, but task completion rate and total tokens for a full fix cycle. This is the true signal.
-- **Watch mode** - real-time incremental index updates as you code, rather than manual re-indexing.
-- **Model flexibility** - document and test with smaller/faster models for teams with less GPU headroom.
+- **Multi-language chunkers** — describer + embedder are language-agnostic. Adding Python, Go, Rust chunkers (via oxc-parser equivalents or tree-sitter) extends coverage. TS/JS only today.
+- **Wider SWE-PolyBench coverage** — 24 instances across 3 repos today. Indexing svelte (46), serverless (33), mui/material-ui (70), vscode (23) would tighten the variance bounds on v17b vs v18 / v17c trade-offs (currently within noise on n=24).
+- **End-to-end agent benchmark** — measure not just file-finding, but task completion + total tokens for full fix cycles. Closest signal to production value.
+- **Smaller models** — test gemma3:1b describer + smaller embedder for teams with less GPU headroom.
+- **Cross-repo group search** — federated index across multiple repos for multi-service codebases.
+
+---
+
+## License
+
+PolyForm Noncommercial 1.0.0 (matching upstream conventions for code-search-as-MCP tools). Commercial use available on request.
