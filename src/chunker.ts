@@ -1,29 +1,29 @@
-import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
+import fs from 'fs';
 // oxc-parser ships native arm64 binaries; no WASM, no async initialization required
 import { parseSync } from 'oxc-parser';
-import { PROJECT_ROOT, loadConfig } from './project.js';
+import path from 'path';
+import { loadConfig, PROJECT_ROOT } from './project.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface Chunk {
-  filePath: string;      // relative to project root
-  startLine: number;     // 1-indexed
-  endLine: number;       // 1-indexed inclusive
+  filePath: string; // relative to project root
+  startLine: number; // 1-indexed
+  endLine: number; // 1-indexed inclusive
   symbolName: string | null;
-  language: string;      // 'typescript' | 'javascript'
+  language: string; // 'typescript' | 'javascript'
   rawCode: string;
-  codeHash: string;      // sha256 hex of rawCode
-  fileMtime: number;     // file modification time as Unix ms
+  codeHash: string; // sha256 hex of rawCode
+  fileMtime: number; // file modification time as Unix ms
 }
 
 // ─── Language mapping ─────────────────────────────────────────────────────────
 
 const EXT_TO_LANG: Record<string, 'typescript' | 'javascript'> = {
-  '.ts':  'typescript',
+  '.ts': 'typescript',
   '.tsx': 'typescript',
-  '.js':  'javascript',
+  '.js': 'javascript',
   '.jsx': 'javascript',
 };
 
@@ -61,10 +61,12 @@ function buildLineOffsets(code: string): number[] {
 
 // Returns 1-indexed line number for a given character offset (binary search).
 function offsetToLine(offsets: number[], offset: number): number {
-  let lo = 0, hi = offsets.length - 1;
+  let lo = 0,
+    hi = offsets.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (offsets[mid] <= offset) lo = mid; else hi = mid - 1;
+    if (offsets[mid] <= offset) lo = mid;
+    else hi = mid - 1;
   }
   return lo + 1;
 }
@@ -73,7 +75,7 @@ function offsetToLine(offsets: number[], offset: number): number {
 
 interface RawChunk {
   startOffset: number;
-  endOffset: number;   // exclusive (ESTree convention)
+  endOffset: number; // exclusive (ESTree convention)
   symbolName: string | null;
 }
 
@@ -148,7 +150,11 @@ function extractFromDecl(node: ASTNode, exportWrapper: ASTNode | null, result: R
             firstArg &&
             (firstArg.type === 'ArrowFunctionExpression' || firstArg.type === 'FunctionExpression')
           ) {
-            result.push({ startOffset: container.start, endOffset: container.end, symbolName: name });
+            result.push({
+              startOffset: container.start,
+              endOffset: container.end,
+              symbolName: name,
+            });
           }
         }
       }
@@ -173,12 +179,15 @@ function extractObjectPropertyChunks(initNode: ASTNode, out: RawChunk[]): void {
     for (const prop of arg.properties ?? []) {
       if (!prop || prop.type !== 'Property') continue;
       if (prop.computed) continue;
-      const keyName = prop.key?.type === 'Identifier' ? prop.key.name
-        : prop.key?.type === 'Literal' && typeof prop.key.value === 'string' ? prop.key.value
-        : null;
+      const keyName =
+        prop.key?.type === 'Identifier'
+          ? prop.key.name
+          : prop.key?.type === 'Literal' && typeof prop.key.value === 'string'
+            ? prop.key.value
+            : null;
       if (!keyName) continue;
       const value = prop.value;
-      if (!value || (value.end - value.start) < PROPERTY_CHUNK_MIN_BYTES) continue;
+      if (!value || value.end - value.start < PROPERTY_CHUNK_MIN_BYTES) continue;
       out.push({ startOffset: prop.start, endOffset: prop.end, symbolName: keyName });
     }
   }
@@ -256,13 +265,18 @@ export function extractManifest(rawCode: string): string {
     if (!childrenInType && !entersTypePosition) {
       if (type === 'Identifier' && typeof node.name === 'string') {
         tokens.add(node.name);
-      } else if (type === 'Literal' && typeof node.value === 'string' && IDENT_LITERAL_RE.test(node.value)) {
+      } else if (
+        type === 'Literal' &&
+        typeof node.value === 'string' &&
+        IDENT_LITERAL_RE.test(node.value)
+      ) {
         tokens.add(node.value);
       }
     }
 
     for (const key in node) {
-      if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+      if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range')
+        continue;
       const child = node[key];
       if (child && typeof child === 'object') visit(child, childrenInType);
     }
@@ -295,7 +309,9 @@ export async function chunkFile(filePath: string): Promise<Chunk[]> {
   const lang = EXT_TO_LANG[ext];
 
   if (!lang) {
-    console.warn(`[chunker] Skipping unsupported file type: ${path.relative(PROJECT_ROOT, filePath)}`);
+    console.warn(
+      `[chunker] Skipping unsupported file type: ${path.relative(PROJECT_ROOT, filePath)}`,
+    );
     return [];
   }
 
@@ -346,8 +362,14 @@ export async function chunkFile(filePath: string): Promise<Chunk[]> {
     let idx = 0;
     while (idx < lines.length) {
       const trimmed = lines[idx].trim();
-      if (trimmed === '') { idx++; continue; }
-      if (trimmed.startsWith('//')) { idx++; continue; }
+      if (trimmed === '') {
+        idx++;
+        continue;
+      }
+      if (trimmed.startsWith('//')) {
+        idx++;
+        continue;
+      }
       if (trimmed.startsWith('import ')) {
         // skip multi-line import statements
         while (idx < lines.length && !lines[idx].includes(';')) idx++;
@@ -401,7 +423,24 @@ export async function chunkFile(filePath: string): Promise<Chunk[]> {
 
 // ─── Walker ───────────────────────────────────────────────────────────────────
 
-export async function* walkAndChunk(projectRoot: string): AsyncGenerator<Chunk> {
+export interface WalkStats {
+  filesSeen: number;
+  filesSkippedMtime: number;
+  filesParsed: number;
+}
+
+// `knownMtimes` (filePath → stored file_mtime) gates the parser: files whose
+// disk mtime is ≤ the stored mtime are skipped entirely. Pass an empty Map to
+// force a full re-walk (initial index, or after schema/chunker rule change).
+// `seenFilePaths`, if provided, is populated with every matched file path
+// (parsed OR mtime-skipped) so callers can compute orphans correctly — files
+// the walker skipped on disk still exist and must NOT be deleted from the DB.
+export async function* walkAndChunk(
+  projectRoot: string,
+  knownMtimes: Map<string, number> = new Map(),
+  stats: WalkStats = { filesSeen: 0, filesSkippedMtime: 0, filesParsed: 0 },
+  seenFilePaths?: Set<string>,
+): AsyncGenerator<Chunk> {
   const cfg = loadConfig();
   const sourceRoots = cfg.indexing?.sourceRoots ?? ['src'];
   const excludePatterns = cfg.indexing?.excludePatterns ?? [];
@@ -433,6 +472,21 @@ export async function* walkAndChunk(projectRoot: string): AsyncGenerator<Chunk> 
       const relPath = path.relative(projectRoot, absFilePath);
       if (matchesAnyExcludePattern(relPath, excludePatterns)) continue;
 
+      stats.filesSeen++;
+      seenFilePaths?.add(relPath);
+
+      // mtime gate: skip parse + chunk if disk mtime hasn't advanced beyond
+      // the stored mtime for this path. Saves the heavy oxc-parser pass on
+      // unchanged files. New/changed files (and files absent from knownMtimes)
+      // still get parsed. seenFilePaths is populated above so orphan cleanup
+      // does NOT delete the existing chunks of an unchanged file.
+      const known = knownMtimes.get(relPath);
+      if (known !== undefined && stat.mtimeMs <= known) {
+        stats.filesSkippedMtime++;
+        continue;
+      }
+
+      stats.filesParsed++;
       const chunks = await chunkFile(absFilePath);
       for (const chunk of chunks) {
         yield chunk;

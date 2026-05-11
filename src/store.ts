@@ -143,7 +143,12 @@ function rowToChunk(row: ChunkRow): StoredChunk {
     codeHash: row.code_hash,
     description: row.description,
     embedding: row.embedding
-      ? new Float32Array(row.embedding.buffer.slice(row.embedding.byteOffset, row.embedding.byteOffset + row.embedding.byteLength))
+      ? new Float32Array(
+          row.embedding.buffer.slice(
+            row.embedding.byteOffset,
+            row.embedding.byteOffset + row.embedding.byteLength,
+          ),
+        )
       : null,
     fileMtime: row.file_mtime,
     allowlisted: row.allowlisted === 1,
@@ -155,7 +160,13 @@ function rowToChunk(row: ChunkRow): StoredChunk {
 export function upsertFileChunks(filePath: string, newChunks: StoredChunk[]): void {
   const database = getDb();
 
-  type ExistingRow = { id: number; start_line: number; end_line: number; code_hash: string; language: string };
+  type ExistingRow = {
+    id: number;
+    start_line: number;
+    end_line: number;
+    code_hash: string;
+    language: string;
+  };
 
   const existingRows = database
     .prepare('SELECT id, start_line, end_line, code_hash, language FROM chunks WHERE file_path = ?')
@@ -179,14 +190,18 @@ export function upsertFileChunks(filePath: string, newChunks: StoredChunk[]): vo
       if (atLine.code_hash === chunk.codeHash && atLine.language === chunk.language) {
         // Function body unchanged — always refresh raw_code so import context stays current.
         // Description/embedding are preserved (still valid for the same function body).
-        database.prepare('UPDATE chunks SET raw_code = ?, file_mtime = ? WHERE id = ?')
+        database
+          .prepare('UPDATE chunks SET raw_code = ?, file_mtime = ? WHERE id = ?')
           .run(chunk.rawCode, chunk.fileMtime, atLine.id);
         continue;
       }
 
       if (atLine.code_hash === chunk.codeHash) {
         // Content unchanged but metadata (language/symbol) migrated — cheap update, keep description+embedding
-        database.prepare('UPDATE chunks SET language = ?, symbol_name = ?, raw_code = ?, file_mtime = ? WHERE id = ?')
+        database
+          .prepare(
+            'UPDATE chunks SET language = ?, symbol_name = ?, raw_code = ?, file_mtime = ? WHERE id = ?',
+          )
           .run(chunk.language, chunk.symbolName, chunk.rawCode, chunk.fileMtime, atLine.id);
         continue;
       }
@@ -194,12 +209,22 @@ export function upsertFileChunks(filePath: string, newChunks: StoredChunk[]): vo
       // Same position, content changed — null out description/embedding for re-generation
       // Also remove stale code-FTS entry so old rawCode cannot surface in BM25 results
       database.prepare('DELETE FROM chunks_code_fts WHERE rowid = ?').run(atLine.id);
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE chunks
         SET end_line = ?, language = ?, symbol_name = ?, raw_code = ?, code_hash = ?, file_mtime = ?,
             description = NULL, embedding = NULL
         WHERE id = ?
-      `).run(chunk.endLine, chunk.language, chunk.symbolName, chunk.rawCode, chunk.codeHash, chunk.fileMtime, atLine.id);
+      `)
+        .run(
+          chunk.endLine,
+          chunk.language,
+          chunk.symbolName,
+          chunk.rawCode,
+          chunk.codeHash,
+          chunk.fileMtime,
+          atLine.id,
+        );
       continue;
     }
 
@@ -207,34 +232,46 @@ export function upsertFileChunks(filePath: string, newChunks: StoredChunk[]): vo
     const shifted = byHash.get(chunk.codeHash);
     if (shifted && !processedIds.has(shifted.id)) {
       processedIds.add(shifted.id);
-      database.prepare(`
+      database
+        .prepare(`
         UPDATE chunks
         SET start_line = ?, end_line = ?, language = ?, symbol_name = ?, raw_code = ?, file_mtime = ?
         WHERE id = ?
-      `).run(chunk.startLine, chunk.endLine, chunk.language, chunk.symbolName, chunk.rawCode, chunk.fileMtime, shifted.id);
+      `)
+        .run(
+          chunk.startLine,
+          chunk.endLine,
+          chunk.language,
+          chunk.symbolName,
+          chunk.rawCode,
+          chunk.fileMtime,
+          shifted.id,
+        );
       continue;
     }
 
     // Genuinely new chunk
     const embeddingBlob = chunk.embedding ? Buffer.from(chunk.embedding.buffer) : null;
-    database.prepare(`
+    database
+      .prepare(`
       INSERT INTO chunks
         (file_path, start_line, end_line, symbol_name, language, raw_code,
          code_hash, description, embedding, file_mtime, allowlisted)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      chunk.filePath,
-      chunk.startLine,
-      chunk.endLine,
-      chunk.symbolName,
-      chunk.language,
-      chunk.rawCode,
-      chunk.codeHash,
-      chunk.description,
-      embeddingBlob,
-      chunk.fileMtime,
-      chunk.allowlisted ? 1 : 0,
-    );
+    `)
+      .run(
+        chunk.filePath,
+        chunk.startLine,
+        chunk.endLine,
+        chunk.symbolName,
+        chunk.language,
+        chunk.rawCode,
+        chunk.codeHash,
+        chunk.description,
+        embeddingBlob,
+        chunk.fileMtime,
+        chunk.allowlisted ? 1 : 0,
+      );
   }
 
   // Delete stale rows: chunks that existed but are not in the new set
@@ -269,9 +306,9 @@ export function updateDescription(id: number, description: string): void {
   // augmentForFts5 which appends split sub-tokens of every compound identifier
   // (Lucene WordDelimiterGraphFilter rules — preserves original + splits) so
   // a query like "configure plugins" matches indexed `configurePlugins`.
-  const row = database
-    .prepare('SELECT raw_code FROM chunks WHERE id = ?')
-    .get(id) as unknown as { raw_code: string } | undefined;
+  const row = database.prepare('SELECT raw_code FROM chunks WHERE id = ?').get(id) as unknown as
+    | { raw_code: string }
+    | undefined;
   if (row) {
     database.prepare('DELETE FROM chunks_code_fts WHERE rowid = ?').run(id);
     database
@@ -324,16 +361,16 @@ export function getAllEmbedded(): EmbeddedChunk[] {
       'SELECT id, file_path, start_line, end_line, symbol_name, code_hash, description, embedding, allowlisted FROM chunks WHERE embedding IS NOT NULL AND description IS NOT NULL',
     )
     .all() as unknown as Array<{
-      id: number;
-      file_path: string;
-      start_line: number;
-      end_line: number;
-      symbol_name: string | null;
-      code_hash: string;
-      description: string;
-      embedding: Uint8Array;
-      allowlisted: number;
-    }>;
+    id: number;
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    symbol_name: string | null;
+    code_hash: string;
+    description: string;
+    embedding: Uint8Array;
+    allowlisted: number;
+  }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -343,7 +380,12 @@ export function getAllEmbedded(): EmbeddedChunk[] {
     symbolName: row.symbol_name,
     codeHash: row.code_hash,
     description: row.description,
-    embedding: new Float32Array(row.embedding.buffer.slice(row.embedding.byteOffset, row.embedding.byteOffset + row.embedding.byteLength)),
+    embedding: new Float32Array(
+      row.embedding.buffer.slice(
+        row.embedding.byteOffset,
+        row.embedding.byteOffset + row.embedding.byteLength,
+      ),
+    ),
     allowlisted: row.allowlisted === 1,
   }));
 }
@@ -359,7 +401,12 @@ export function getAllCodeEmbeddings(): Map<number, Float32Array> {
   for (const row of rows) {
     out.set(
       row.id,
-      new Float32Array(row.code_embedding.buffer.slice(row.code_embedding.byteOffset, row.code_embedding.byteOffset + row.code_embedding.byteLength)),
+      new Float32Array(
+        row.code_embedding.buffer.slice(
+          row.code_embedding.byteOffset,
+          row.code_embedding.byteOffset + row.code_embedding.byteLength,
+        ),
+      ),
     );
   }
   return out;
@@ -373,16 +420,16 @@ export function deleteOrphans(existingFilePaths: Set<string>): number {
     .prepare('SELECT DISTINCT file_path FROM chunks')
     .all() as unknown as Array<{ file_path: string }>;
 
-  const orphans = allPaths
-    .map((r) => r.file_path)
-    .filter((p) => !existingFilePaths.has(p));
+  const orphans = allPaths.map((r) => r.file_path).filter((p) => !existingFilePaths.has(p));
 
   if (orphans.length === 0) return 0;
 
   const placeholders = orphans.map(() => '?').join(', ');
   // Sync code-FTS before deleting rows (needs the IDs)
   database
-    .prepare(`DELETE FROM chunks_code_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_path IN (${placeholders}))`)
+    .prepare(
+      `DELETE FROM chunks_code_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_path IN (${placeholders}))`,
+    )
     .run(...orphans);
   const result = database
     .prepare(`DELETE FROM chunks WHERE file_path IN (${placeholders})`)
@@ -409,11 +456,11 @@ export function getStatus(): IndexStatus {
       'SELECT COUNT(*) as total, SUM(CASE WHEN description IS NOT NULL THEN 1 ELSE 0 END) as with_desc, SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) as with_emb, MAX(file_mtime) as last_indexed FROM chunks',
     )
     .get() as unknown as {
-      total: number;
-      with_desc: number;
-      with_emb: number;
-      last_indexed: number | null;
-    };
+    total: number;
+    with_desc: number;
+    with_emb: number;
+    last_indexed: number | null;
+  };
 
   const langRows = database
     .prepare('SELECT language, COUNT(*) as cnt FROM chunks GROUP BY language')
@@ -441,10 +488,14 @@ export function clearDescriptionsForFilePaths(filePaths: string[]): number {
   const placeholders = filePaths.map(() => '?').join(', ');
   // Remove code-FTS entries before clearing descriptions
   database
-    .prepare(`DELETE FROM chunks_code_fts WHERE rowid IN (SELECT id FROM chunks WHERE description IS NOT NULL AND file_path IN (${placeholders}))`)
+    .prepare(
+      `DELETE FROM chunks_code_fts WHERE rowid IN (SELECT id FROM chunks WHERE description IS NOT NULL AND file_path IN (${placeholders}))`,
+    )
     .run(...filePaths);
   const result = database
-    .prepare(`UPDATE chunks SET description = NULL, embedding = NULL WHERE file_path IN (${placeholders})`)
+    .prepare(
+      `UPDATE chunks SET description = NULL, embedding = NULL WHERE file_path IN (${placeholders})`,
+    )
     .run(...filePaths) as unknown as { changes: number };
   return result.changes;
 }
@@ -467,11 +518,18 @@ export function getDescriptionForCodeHash(
     .prepare(
       'SELECT description, embedding FROM chunks WHERE code_hash = ? AND id != ? AND description IS NOT NULL AND embedding IS NOT NULL LIMIT 1',
     )
-    .get(codeHash, excludeId) as unknown as { description: string; embedding: Uint8Array } | undefined;
+    .get(codeHash, excludeId) as unknown as
+    | { description: string; embedding: Uint8Array }
+    | undefined;
   if (!row) return null;
   return {
     description: row.description,
-    embedding: new Float32Array(row.embedding.buffer.slice(row.embedding.byteOffset, row.embedding.byteOffset + row.embedding.byteLength)),
+    embedding: new Float32Array(
+      row.embedding.buffer.slice(
+        row.embedding.byteOffset,
+        row.embedding.byteOffset + row.embedding.byteLength,
+      ),
+    ),
   };
 }
 
@@ -482,6 +540,18 @@ export function getChunksForFilePaths(filePaths: string[]): StoredChunk[] {
     .prepare(`SELECT * FROM chunks WHERE file_path IN (${placeholders})`)
     .all(...filePaths) as unknown as ChunkRow[];
   return rows.map(rowToChunk);
+}
+
+// mtime gate for incremental indexing — returns a map of filePath → max stored
+// file_mtime across all chunks of that path. Walker uses this to skip parsing
+// files whose disk mtime hasn't advanced beyond the stored one.
+export function getFileMtimes(): Map<string, number> {
+  const rows = getDb()
+    .prepare('SELECT file_path, MAX(file_mtime) AS mtime FROM chunks GROUP BY file_path')
+    .all() as unknown as Array<{ file_path: string; mtime: number }>;
+  const out = new Map<string, number>();
+  for (const r of rows) out.set(r.file_path, r.mtime);
+  return out;
 }
 
 // ─── Allowlist ────────────────────────────────────────────────────────────────
@@ -495,7 +565,9 @@ export function setAllowlisted(symbolName: string, allowlisted: boolean): void {
 // ─── Cosine similarity ────────────────────────────────────────────────────────
 
 function cosine(a: Float32Array, b: Float32Array): number {
-  let dot = 0, normA = 0, normB = 0;
+  let dot = 0,
+    normA = 0,
+    normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
@@ -561,7 +633,7 @@ export function toFts5Query(text: string): string {
   // terms in the matched chunk → higher precision. Recall protection: vector channel still
   // returns full corpus ranking via RRF, so even if BM25 returns [] the dense channel wins.
   const words = text
-    .replace(/["*()\^]/g, ' ')
+    .replace(/["*()^]/g, ' ')
     .trim()
     .split(/\s+/)
     .filter((w) => w.length >= 3);
@@ -652,9 +724,9 @@ export function searchHybrid(
     const codeRank = codeRankMap.get(chunk.id);
     const bm25Rank = bm25RankMap.get(chunk.id);
     const rrfScore =
-      1 / (K + descRank)
-      + (codeRank != null ? 1 / (K + codeRank) : 0)
-      + (bm25Rank != null ? 1 / (K + bm25Rank) : 0);
+      1 / (K + descRank) +
+      (codeRank != null ? 1 / (K + codeRank) : 0) +
+      (bm25Rank != null ? 1 / (K + bm25Rank) : 0);
     return { ...chunk, rrfScore, descRank, codeRank: codeRank ?? null, bm25Rank: bm25Rank ?? null };
   });
 

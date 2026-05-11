@@ -1,34 +1,34 @@
-import path from 'path';
 import fs from 'fs';
-
-import { PROJECT_ROOT, loadConfig, CONFIG_FILE, DEFAULT_CONFIG } from './project.js';
+import path from 'path';
+import { applyAllowlist } from './allowlist.js';
+import { runBenchmark } from './benchmark.js';
 import { init, walkAndChunk } from './chunker.js';
+import { buildFileContext, describe, initDescriber } from './describer.js';
+import { buildEmbedText, embed, embedQuery, initEmbedder } from './embedder.js';
+import { runIntegrationBenchmark } from './integration-benchmark.js';
+import { startMcpServer } from './mcp-server.js';
+import { CONFIG_FILE, DEFAULT_CONFIG, loadConfig, PROJECT_ROOT } from './project.js';
 import {
-  openDb,
-  getDb,
-  upsertFileChunks,
-  type StoredChunk,
-  getChunksNeedingDescription,
-  updateDescription,
-  getChunksNeedingEmbedding,
-  updateEmbedding,
-  updateCodeEmbedding,
   clearAllCodeEmbeddings,
-  getStatus,
-  searchBySimilarity,
+  clearAllEmbeddings,
   clearDescriptionsForFilePaths,
   getChunksForFilePaths,
+  getChunksNeedingDescription,
+  getChunksNeedingEmbedding,
+  getDb,
   getDescriptionForCodeHash,
-  clearAllEmbeddings,
+  getFileMtimes,
+  getStatus,
+  openDb,
+  type StoredChunk,
+  searchBySimilarity,
+  updateCodeEmbedding,
+  updateDescription,
+  updateEmbedding,
+  upsertFileChunks,
 } from './store.js';
-import { applyAllowlist } from './allowlist.js';
-import { initDescriber, describe, buildFileContext } from './describer.js';
-import { initEmbedder, embed, embedQuery, buildEmbedText } from './embedder.js';
 import { augmentForFts5 } from './tokenizer.js';
-import { startMcpServer } from './mcp-server.js';
 import { runWatch } from './watcher.js';
-import { runBenchmark } from './benchmark.js';
-import { runIntegrationBenchmark } from './integration-benchmark.js';
 
 // ─── Timing helpers ───────────────────────────────────────────────────────────
 
@@ -58,7 +58,9 @@ function printProgress(processed: number, total: number, phaseStart: number, lab
   const rate = processed / (elapsedMs / 1000);
   const eta = processed < total ? `  ETA: ~${formatEta(remaining)}` : '  done';
   const line = `  [${processed}/${total}] ${pct}%  ${rate.toFixed(1)}/s  elapsed: ${elapsed(phaseStart)}${eta}  ${label}`;
-  process.stdout.write(`\r${line.slice(0, process.stdout.columns ?? 120).padEnd(process.stdout.columns ?? 120)}`);
+  process.stdout.write(
+    `\r${line.slice(0, process.stdout.columns ?? 120).padEnd(process.stdout.columns ?? 120)}`,
+  );
 }
 
 // ─── Index command ────────────────────────────────────────────────────────────
@@ -78,10 +80,14 @@ export async function runIndex(
     openDb();
     const db = getDb();
     db.exec('DELETE FROM chunks_code_fts');
-    const rows = db.prepare('SELECT id, raw_code FROM chunks WHERE description IS NOT NULL').all() as unknown as Array<{ id: number; raw_code: string }>;
+    const rows = db
+      .prepare('SELECT id, raw_code FROM chunks WHERE description IS NOT NULL')
+      .all() as unknown as Array<{ id: number; raw_code: string }>;
     const insert = db.prepare('INSERT INTO chunks_code_fts(rowid, content) VALUES (?, ?)');
     for (const row of rows) insert.run(row.id, augmentForFts5(row.raw_code));
-    console.log(`Indexed ${rows.length} chunks into chunks_code_fts. Total time: ${elapsed(totalStart)}`);
+    console.log(
+      `Indexed ${rows.length} chunks into chunks_code_fts. Total time: ${elapsed(totalStart)}`,
+    );
     return;
   }
 
@@ -91,7 +97,9 @@ export async function runIndex(
     openDb();
     const cleared = clearAllEmbeddings();
     const codeCleared = clearAllCodeEmbeddings();
-    console.log(`Cleared ${cleared} description-embeddings + ${codeCleared} code-embeddings. Re-embedding now.\n`);
+    console.log(
+      `Cleared ${cleared} description-embeddings + ${codeCleared} code-embeddings. Re-embedding now.\n`,
+    );
     initEmbedder();
     const phase1Start = Date.now();
     const chunks = getChunksNeedingEmbedding();
@@ -123,19 +131,30 @@ export async function runIndex(
   }
 
   // ── Phase 0: Walk files, upsert chunks, delete orphans ──────────────────────
+  // mtime-gated incremental walk: load each path's stored max file_mtime; skip
+  // parsing files whose disk mtime hasn't advanced. Force-reindex bypasses by
+  // passing an empty map (already cleared above). seenFilePaths is populated
+  // by the walker for every file present (parsed OR mtime-skipped) so orphan
+  // cleanup only deletes files truly gone from disk.
   const phase0Start = Date.now();
   console.log('Phase 0: Scanning files...');
 
   openDb();
   await init();
 
+  const knownMtimes = forceReindex ? new Map<string, number>() : getFileMtimes();
   const seenFilePaths = new Set<string>();
+  const walkStats = { filesSeen: 0, filesSkippedMtime: 0, filesParsed: 0 };
   let chunkCount = 0;
   const chunksByFile = new Map<string, StoredChunk[]>();
 
-  for await (const chunk of walkAndChunk(PROJECT_ROOT)) {
-    seenFilePaths.add(chunk.filePath);
-    const stored: StoredChunk = { ...chunk, description: null, embedding: null, allowlisted: false };
+  for await (const chunk of walkAndChunk(PROJECT_ROOT, knownMtimes, walkStats, seenFilePaths)) {
+    const stored: StoredChunk = {
+      ...chunk,
+      description: null,
+      embedding: null,
+      allowlisted: false,
+    };
     const existing = chunksByFile.get(chunk.filePath);
     if (existing) existing.push(stored);
     else chunksByFile.set(chunk.filePath, [stored]);
@@ -150,7 +169,7 @@ export async function runIndex(
   const orphansDeleted = deleteOrphans(seenFilePaths);
 
   console.log(
-    `Phase 0 done: ${chunkCount} chunks upserted, ${orphansDeleted} orphaned chunks removed. (${elapsed(phase0Start)})\n`,
+    `Phase 0 done: ${walkStats.filesSeen} files seen (${walkStats.filesParsed} parsed, ${walkStats.filesSkippedMtime} unchanged), ${chunkCount} chunks upserted, ${orphansDeleted} orphan chunks removed. (${elapsed(phase0Start)})\n`,
   );
 
   if (phase0Only) {
@@ -174,12 +193,15 @@ export async function runIndex(
 
   // Move seed files to the front of the describe queue so they validate quickly
   if (seedFiles.length > 0) {
-    const isSeed = (fp: string) => seedFiles.some((s) => fp === s || fp.endsWith(`/${s}`) || fp.includes(s));
+    const isSeed = (fp: string) =>
+      seedFiles.some((s) => fp === s || fp.endsWith(`/${s}`) || fp.includes(s));
     const seeds = needingDescription.filter((c) => isSeed(c.filePath));
     const rest = needingDescription.filter((c) => !isSeed(c.filePath));
     needingDescription = [...seeds, ...rest];
     if (seeds.length > 0) {
-      console.log(`  Seeding ${seeds.length} priority chunks first (${[...new Set(seeds.map((c) => c.filePath))].join(', ')})`);
+      console.log(
+        `  Seeding ${seeds.length} priority chunks first (${[...new Set(seeds.map((c) => c.filePath))].join(', ')})`,
+      );
     }
   }
 
@@ -224,9 +246,14 @@ export async function runIndex(
 
     if (!fileContextCache.has(chunk.filePath)) {
       try {
-        const content = await fs.promises.readFile(path.join(PROJECT_ROOT, chunk.filePath), 'utf-8');
+        const content = await fs.promises.readFile(
+          path.join(PROJECT_ROOT, chunk.filePath),
+          'utf-8',
+        );
         fileContextCache.set(chunk.filePath, buildFileContext(content));
-      } catch { fileContextCache.set(chunk.filePath, ''); }
+      } catch {
+        fileContextCache.set(chunk.filePath, '');
+      }
     }
     const desc = await describe(chunk.rawCode, fileContextCache.get(chunk.filePath));
     updateDescription(chunk.id!, desc);
@@ -268,7 +295,12 @@ export async function runRedescribe(filePatterns: string[]): Promise<void> {
 
   for await (const chunk of walkAndChunk(PROJECT_ROOT)) {
     seenFilePaths.add(chunk.filePath);
-    const stored: StoredChunk = { ...chunk, description: null, embedding: null, allowlisted: false };
+    const stored: StoredChunk = {
+      ...chunk,
+      description: null,
+      embedding: null,
+      allowlisted: false,
+    };
     const existing = chunksByFile.get(chunk.filePath);
     if (existing) existing.push(stored);
     else chunksByFile.set(chunk.filePath, [stored]);
@@ -281,7 +313,8 @@ export async function runRedescribe(filePatterns: string[]): Promise<void> {
   console.log(`Phase 0 done. (${elapsed(totalStart)})\n`);
 
   // Resolve file patterns → relative paths present in the DB
-  const isSeed = (fp: string) => filePatterns.some((s) => fp === s || fp.endsWith(`/${s}`) || fp.includes(s));
+  const isSeed = (fp: string) =>
+    filePatterns.some((s) => fp === s || fp.endsWith(`/${s}`) || fp.includes(s));
   const targetPaths = [...seenFilePaths].filter(isSeed);
 
   if (targetPaths.length === 0) {
@@ -308,9 +341,14 @@ export async function runRedescribe(filePatterns: string[]): Promise<void> {
   for (const chunk of chunks) {
     if (!rdFileContextCache.has(chunk.filePath)) {
       try {
-        const content = await fs.promises.readFile(path.join(PROJECT_ROOT, chunk.filePath), 'utf-8');
+        const content = await fs.promises.readFile(
+          path.join(PROJECT_ROOT, chunk.filePath),
+          'utf-8',
+        );
         rdFileContextCache.set(chunk.filePath, buildFileContext(content));
-      } catch { rdFileContextCache.set(chunk.filePath, ''); }
+      } catch {
+        rdFileContextCache.set(chunk.filePath, '');
+      }
     }
     const desc = await describe(chunk.rawCode, rdFileContextCache.get(chunk.filePath));
     updateDescription(chunk.id!, desc);
@@ -322,12 +360,19 @@ export async function runRedescribe(filePatterns: string[]): Promise<void> {
   }
 
   process.stdout.write('\n');
-  console.log(`\nRedescribe complete. ${chunks.length} chunks updated. Total time: ${elapsed(totalStart)}`);
+  console.log(
+    `\nRedescribe complete. ${chunks.length} chunks updated. Total time: ${elapsed(totalStart)}`,
+  );
 }
 
 // ─── Search command ───────────────────────────────────────────────────────────
 
-export async function runSearch(query: string, limit = 5, jsonOutput = false, mcpFormat = false): Promise<void> {
+export async function runSearch(
+  query: string,
+  limit = 5,
+  jsonOutput = false,
+  mcpFormat = false,
+): Promise<void> {
   // Route through `search()` so the CLI `search` command uses the same hybrid
   // retrieval (3-channel RRF: description + code + BM25-with-identifier-splits)
   // that the MCP server and internal benchmark use.
@@ -378,6 +423,26 @@ export async function runStatus(): Promise<void> {
     console.log(`  Last indexed (mtime): (none)`);
   }
 
+  // Show running state by checking last-index.log mtime. Background reindex
+  // triggered by the MCP writes to this file; if its mtime was within 10s,
+  // an index pass is likely still running.
+  const logPath = path.join(PROJECT_ROOT, '.search-code', 'last-index.log');
+  try {
+    const logMtime = fs.statSync(logPath).mtimeMs;
+    const ageMs = Date.now() - logMtime;
+    if (ageMs < 10_000) {
+      console.log(
+        `  Index status:        🟢 RUNNING (log touched ${Math.round(ageMs / 1000)}s ago — tail with: tail -f ${logPath})`,
+      );
+    } else {
+      console.log(
+        `  Index status:        idle (last run ${Math.round(ageMs / 60_000)}min ago — log: ${logPath})`,
+      );
+    }
+  } catch {
+    // log absent → no background reindex has ever fired
+  }
+
   console.log('  Languages:');
   for (const [lang, count] of Object.entries(status.languages)) {
     console.log(`    ${lang.padEnd(14)} ${count}`);
@@ -406,7 +471,8 @@ export async function runInit(): Promise<void> {
 
 // ─── CLI dispatch ─────────────────────────────────────────────────────────────
 
-const isMain = process.env.SEMANTIC_SEARCH_CLI === '1' || process.argv[1]?.endsWith('dist/index.js');
+const isMain =
+  process.env.SEMANTIC_SEARCH_CLI === '1' || process.argv[1]?.endsWith('dist/index.js');
 
 if (isMain) {
   const [, , cmd, ...args] = process.argv;
@@ -420,7 +486,8 @@ if (isMain) {
           const reembedOnly = args.includes('--reembed-only');
           const rebuildCodeFts = args.includes('--rebuild-code-fts');
           const seedIdx = args.indexOf('--seed-files');
-          const seedFiles = seedIdx !== -1 ? (args[seedIdx + 1] ?? '').split(',').filter(Boolean) : [];
+          const seedFiles =
+            seedIdx !== -1 ? (args[seedIdx + 1] ?? '').split(',').filter(Boolean) : [];
           await runIndex(forceReindex, phase0Only, seedFiles, reembedOnly, rebuildCodeFts);
           break;
         }
@@ -428,11 +495,18 @@ if (isMain) {
         case 'search': {
           const query = args[0];
           if (!query) {
-            console.error('Usage: node dist/index.js search "<query>" [--limit N] [--json|--format mcp]');
+            console.error(
+              'Usage: node dist/index.js search "<query>" [--limit N] [--json|--format mcp]',
+            );
             process.exit(1);
           }
           const limitIdx = args.indexOf('--limit');
-          const limit = limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : (args[1] && !args[1].startsWith('--') ? parseInt(args[1], 10) : undefined);
+          const limit =
+            limitIdx !== -1
+              ? parseInt(args[limitIdx + 1], 10)
+              : args[1] && !args[1].startsWith('--')
+                ? parseInt(args[1], 10)
+                : undefined;
           const jsonOutput = args.includes('--json');
           const formatIdx = args.indexOf('--format');
           const mcpFormat = formatIdx !== -1 && args[formatIdx + 1] === 'mcp';
@@ -453,7 +527,12 @@ if (isMain) {
         case 'benchmark': {
           const debug = args.includes('--debug');
           const debugFileIdx = args.indexOf('--debug-file');
-          const debugFile = debugFileIdx !== -1 ? args[debugFileIdx + 1] : (debug ? path.join(PROJECT_ROOT, 'benchmark-debug.log') : undefined);
+          const debugFile =
+            debugFileIdx !== -1
+              ? args[debugFileIdx + 1]
+              : debug
+                ? path.join(PROJECT_ROOT, 'benchmark-debug.log')
+                : undefined;
           await runBenchmark(PROJECT_ROOT, { debug, debugFile });
           break;
         }
