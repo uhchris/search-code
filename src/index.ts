@@ -4,10 +4,10 @@ import { applyAllowlist } from './allowlist.js';
 import { runBenchmark } from './benchmark.js';
 import { init, walkAndChunk } from './chunker.js';
 import { buildFileContext, describe, initDescriber } from './describer.js';
-import { buildEmbedText, embed, embedQuery, initEmbedder } from './embedder.js';
+import { buildEmbedText, embed, initEmbedder } from './embedder.js';
 import { runIntegrationBenchmark } from './integration-benchmark.js';
 import { startMcpServer } from './mcp-server.js';
-import { CONFIG_FILE, DEFAULT_CONFIG, loadConfig, PROJECT_ROOT } from './project.js';
+import { CONFIG_FILE, DEFAULT_CONFIG, PROJECT_ROOT } from './project.js';
 import {
   clearAllCodeEmbeddings,
   clearAllEmbeddings,
@@ -21,7 +21,6 @@ import {
   getStatus,
   openDb,
   type StoredChunk,
-  searchBySimilarity,
   updateCodeEmbedding,
   updateDescription,
   updateEmbedding,
@@ -109,8 +108,8 @@ export async function runIndex(
       const embText = buildEmbedText({ ...chunk, description: chunk.description! });
       const emb = await embed(embText);
       updateEmbedding(chunk.id!, emb);
-      // v16: code-channel — embed the raw chunk text directly so dense retrieval
-      // has both a paraphrase channel (description) and a semantic-code channel.
+      // Code-channel: embed the raw chunk text directly so dense retrieval has
+      // both a paraphrase channel (description) and a semantic-code channel.
       const codeEmb = await embed(chunk.rawCode);
       updateCodeEmbedding(chunk.id!, codeEmb);
       done++;
@@ -233,10 +232,9 @@ export async function runIndex(
     if (existing) {
       updateDescription(chunk.id!, existing.description);
       updateEmbedding(chunk.id!, existing.embedding);
-      // v16: code embedding is per-chunk-content (codeHash) — same hash means
-      // identical rawCode, so reuse the description but recompute code embedding
-      // from rawCode (cheap, no LLM). Skipped here; the embed-only loop above
-      // catches it if needed. Just embed it now.
+      // Code embedding is keyed by codeHash — same hash means identical
+      // rawCode, so reuse the description but recompute code embedding from
+      // rawCode (cheap, no LLM).
       const codeEmb = await embed(chunk.rawCode);
       updateCodeEmbedding(chunk.id!, codeEmb);
       workDone++;
@@ -380,8 +378,8 @@ export async function runSearch(
   const results = await search(query, { limit });
 
   if (mcpFormat) {
-    const { renderMcpV17b } = await import('./render.js');
-    process.stdout.write(renderMcpV17b(results, query, limit) + '\n');
+    const { renderMcp } = await import('./render.js');
+    process.stdout.write(renderMcp(results, query, limit) + '\n');
     return;
   }
 

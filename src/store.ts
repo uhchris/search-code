@@ -40,7 +40,7 @@ export interface SearchResult {
   description: string;
   similarity: number;
   allowlisted: boolean;
-  // v17: per-channel rank metadata for hybrid retrieval transparency.
+  // Per-channel rank metadata for hybrid retrieval transparency.
   // null = chunk not in this channel's top-K candidate set.
   // Convention: rank 1 = best in that channel.
   descRank: number | null;
@@ -100,7 +100,7 @@ export function openDb(dbPath?: string): void {
   // WAL mode allows concurrent reads (benchmark, search) while the indexer writes
   db.exec('PRAGMA journal_mode=WAL');
   db.exec(SCHEMA);
-  // Idempotent migration: add code_embedding column to existing DBs that pre-date v16
+  // Idempotent migration: add code_embedding column to existing DBs.
   const cols = db.prepare('PRAGMA table_info(chunks)').all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === 'code_embedding')) {
     db.exec('ALTER TABLE chunks ADD COLUMN code_embedding BLOB');
@@ -302,10 +302,9 @@ export function getChunksNeedingDescription(): StoredChunk[] {
 export function updateDescription(id: number, description: string): void {
   const database = getDb();
   database.prepare('UPDATE chunks SET description = ? WHERE id = ?').run(description, id);
-  // Sync code-FTS (hybrid sparse channel). v15: rawCode passes through
+  // Sync code-FTS (hybrid sparse channel). rawCode passes through
   // augmentForFts5 which appends split sub-tokens of every compound identifier
-  // (Lucene WordDelimiterGraphFilter rules — preserves original + splits) so
-  // a query like "configure plugins" matches indexed `configurePlugins`.
+  // so a query like "configure plugins" matches indexed `configurePlugins`.
   const row = database.prepare('SELECT raw_code FROM chunks WHERE id = ?').get(id) as unknown as
     | { raw_code: string }
     | undefined;
@@ -330,9 +329,9 @@ export function updateEmbedding(id: number, embedding: Float32Array): void {
     .run(Buffer.from(embedding.buffer), id);
 }
 
-// v16: code-side dense embedding — embedQuery vs embed(rawCode) gives a third
-// retrieval channel orthogonal to description-embedding (paraphrase) and BM25
-// (lexical). Stored separately so RRF can fuse all three independently.
+// Code-side dense embedding — embed(rawCode) gives a third retrieval channel
+// orthogonal to description-embedding (paraphrase) and BM25 (lexical).
+// Stored separately so RRF can fuse all three independently.
 export function updateCodeEmbedding(id: number, embedding: Float32Array): void {
   getDb()
     .prepare('UPDATE chunks SET code_embedding = ? WHERE id = ?')
@@ -390,8 +389,8 @@ export function getAllEmbedded(): EmbeddedChunk[] {
   }));
 }
 
-// v16: Code-side embeddings keyed by chunk id. Loaded once per query alongside
-// description embeddings so the searchHybrid path can score both channels in
+// Code-side embeddings keyed by chunk id. Loaded once per query alongside
+// description embeddings so the searchHybrid path scores both channels in
 // the same in-memory pass.
 export function getAllCodeEmbeddings(): Map<number, Float32Array> {
   const rows = getDb()
@@ -645,9 +644,9 @@ interface Bm25Row {
   score: number;
 }
 
-// v9 hybrid sparse channel: BM25 over rawCode (chunks_code_fts).
-// Lexical matching for identifier-style queries (e.g. `configurePlugins`) that the
-// description-channel embedding misses. Same FTS5 tokenizer as the description path.
+// Hybrid sparse channel: BM25 over rawCode (chunks_code_fts).
+// Lexical matching for identifier-style queries (e.g. `configurePlugins`) that
+// the description-channel embedding misses.
 function searchByCodeBm25(queryText: string, limit: number): Array<{ id: number; rank: number }> {
   const ftsQuery = toFts5Query(queryText);
   if (!ftsQuery) return [];
@@ -677,13 +676,11 @@ export function searchHybrid(
 ): SearchResult[] {
   const K = 60; // standard RRF constant
 
-  // Score every embedded chunk on BOTH dense channels:
+  // Score every embedded chunk on both dense channels:
   //   description-channel (LLM prose) — paraphrase strength
   //   code-channel (rawCode embedded directly) — semantic code understanding
-  // v16: third RRF channel; embeddinggemma is code-aware so embed(rawCode)
-  // returns vectors comparable to embedQuery() output. v10 tried code-only
-  // (replacing description channel) and regressed catastrophically; this is
-  // additive — both dense channels + sparse channel fuse via RRF.
+  // BM25 is fused additively as the third channel via RRF; replacing either
+  // dense channel with code-only regresses recall, so all three are kept.
   const embedded = getAllEmbedded();
   const codeEmbeddings = getAllCodeEmbeddings();
 
@@ -702,8 +699,8 @@ export function searchHybrid(
     .sort((a, b) => b.similarity - a.similarity);
 
   // Code-channel rank map: cosine(query, embed(rawCode)) for each chunk that
-  // has a code_embedding. Skipped when getAllCodeEmbeddings() is empty (DBs
-  // pre-dating v16); searchHybrid degrades to v15 behaviour.
+  // has a code_embedding. Skipped when no code embeddings exist; searchHybrid
+  // then degrades to description + BM25 only.
   const codeRankMap = new Map<number, number>();
   if (codeEmbeddings.size > 0) {
     const codeScored = embedded

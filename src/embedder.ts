@@ -40,12 +40,9 @@ let queryPrefix: string = '';
 let documentPrefix: string = '';
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-// Default embedder: embeddinggemma. SOTA on MTEB(Code) for sub-500M models per
-// arXiv:2509.20354 — handles BOTH prose and code in a single embedding space, so
-// there's no reason to swap to a code-specialised model. Already-evaluated alternatives:
-//   - nomic-embed-text: identical scores to embeddinggemma (see v3-nomic.md)
-//   - nomic-embed-text-code: scores went DOWN — code-specialised model underperforms
-//     on our LLM-generated NL descriptions. Do not retry for description channel.
+// Default embedder: embeddinggemma — handles both prose and code in a single
+// embedding space, so the same model can score description queries and raw-code
+// queries without a separate code-specialised model.
 
 export function initEmbedder(): void {
   if (embedderModel) return;
@@ -131,12 +128,10 @@ export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
 }
 
 // ─── Embed text builder (single source of truth) ──────────────────────────────
-// v8a (merged full rawCode + description) regressed R@1 79% → 15%. v12 tried a
-// structural identifier MANIFEST as prefix (GraphCodeBERT-style leaf identifiers
-// + CodeT5-style filtering, prefix placement per arXiv:2412.15241): on the 40-case
-// internal bench it cost R@1 −7pp + MRR −0.039 to lift one Mode 2 case (chat schema)
-// from R@5=0 to R@3. Reverted. Manifest path lives in chunker.extractManifest in
-// case future work wants to revisit a smaller-cap or selective-application variant.
+// Embed text is the LLM-generated description plus a minimal source pointer.
+// Merging the full rawCode in, or prepending a structural identifier manifest,
+// both regressed recall on the internal bench — kept as a deliberate negative
+// result rather than reattempted.
 
 export function buildEmbedText(chunk: {
   filePath: string;

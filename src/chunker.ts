@@ -218,22 +218,11 @@ function collectFromBody(body: ASTNode[]): RawChunk[] {
 // identifiers like `userIntegrations` that don't appear in the LLM-generated
 // description.
 //
-// Approach (engineering extrapolation, not a direct paper citation):
-//   - GraphCodeBERT (arXiv:2009.08366 §3): "terminals (leaves) are used to
-//     identify the variable sequence, denoted as V = {v₁, v₂, …, vₖ}". Variables
-//     = AST leaf identifiers.
-//   - CodeT5 (arXiv:2109.00859 §4.1): "We filter out reserved keywords for each
-//     PL from its identifier list" — keyword filtering is per-PL and structural,
-//     not a hardcoded common-name stoplist.
-//   - Positional bias (arXiv:2412.15241): prefix carries up to 12.3% more
-//     embedding influence than suffix. Justifies prefix placement.
-//
-// Concretely: collect every ESTree `Identifier` and identifier-shaped string
-// `Literal` outside TypeScript type positions. ESTree never emits keywords as
-// Identifier nodes (they parse as keyword tokens / dedicated node types), so
-// the only structural noise is type-position primitives (`string`, `number`,
-// `Promise`, `Array`) — gated by skipping any subtree under a TS*-prefixed
-// node. No name-based stoplist is needed.
+// Walks ESTree `Identifier` and identifier-shaped string `Literal` nodes,
+// skipping subtrees under any TS*-prefixed node so type-position primitives
+// (`string`, `number`, `Promise`, `Array`) don't leak into the manifest.
+// No hand-coded keyword list — ESTree never emits language keywords as
+// Identifier nodes.
 
 const MANIFEST_TOKEN_LIMIT = 50;
 const IDENT_LITERAL_RE = /^[a-zA-Z_][a-zA-Z0-9_]{1,49}$/;

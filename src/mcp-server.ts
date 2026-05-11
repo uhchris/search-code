@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { initDescriber } from './describer.js';
 import { initEmbedder } from './embedder.js';
 import { PROJECT_ROOT } from './project.js';
-import { renderMcpV17b } from './render.js';
+import { renderMcp } from './render.js';
 import { search } from './search.js';
 import { openDb } from './store.js';
 
@@ -100,7 +100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const limit = (args as Record<string, unknown>)['limit'] as number | undefined;
 
     const results = await search(query, { limit });
-    const text = renderMcpV17b(results, query, limit ?? 5);
+    const text = renderMcp(results, query, limit ?? 5);
     // Fire-and-forget incremental reindex so the next search reflects recent
     // edits. Debounced + lock-guarded; cheap on no-change runs via mtime gate.
     maybeTriggerBackgroundReindex();

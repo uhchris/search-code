@@ -8,8 +8,10 @@ dist/
 # Per-repo state — created at runtime by `search-code index`
 .search-code/
 
-# SWE-PolyBench cloned worktrees + per-commit DBs (4+ GB) — re-clone via run.py
-benchmark/swe-poly/repos/
+# Internal benchmark journal + auxiliary harnesses (kept local, not published)
+benchmark/results/
+benchmark/swe-poly/
+benchmark/token-efficiency/
 
-# Raw bench logs
-benchmark/results/*-bench.log
+# Python bytecode
+__pycache__/
