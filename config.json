@@ -15,7 +15,7 @@
   },
   "indexing": {
     "sourceRoots": ["src", "socket-server/src"],
-    "excludePatterns": ["**/*.test.ts", "**/*.test.tsx", "**/*.d.ts", "**/node_modules/**", "**/cloned-projects/**", "**/*icons*.tsx", "**/*icon*.tsx", "**/canvas-icons.tsx"],
+    "excludePatterns": ["**/*.test.ts", "**/*.test.tsx", "**/*.d.ts", "**/node_modules/**", "**/cloned-projects/**", "**/*icons*.tsx", "**/*icon*.tsx", "**/canvas-icons.tsx", "**/__pycache__/**", "**/*.pyc", "**/.venv/**", "**/venv/**", "**/.pytest_cache/**", "**/.mypy_cache/**", "**/dist/**"],
     "minChunkLines": 5,
     "maxChunkLines": 300,
     "concurrency": 1

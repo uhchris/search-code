@@ -22,7 +22,7 @@ On the SWE-PolyBench Verified agent benchmark (n=24): **R@1 19/24 (79%) at 226K 
 
 **Indexing** (one-time per repo, then incremental):
 
-1. **Chunk** — parse via [oxc-parser](https://github.com/oxc-project/oxc). Each function, class, exported variable, and tRPC-router-style sub-procedure becomes its own chunk. Drizzle table definitions are chunked. Boundaries follow real code structure.
+1. **Chunk** — parse TS/JS via [oxc-parser](https://github.com/oxc-project/oxc) and Python via [tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python). Each function, class, exported variable, and tRPC-router-style sub-procedure becomes its own chunk. Drizzle table definitions and decorated Python functions (`@app.route`, `@dataclass`) keep their decorators attached so the embedder sees the routing intent. Python respects `__all__` for module-level assignments; absent that, the leading-underscore convention is used. Boundaries follow real code structure.
 2. **Describe** — each chunk is passed to a local LLM (default: `gemma4:26b`) which writes 2–3 sentences explaining what the code does, the domain, and key constraints. Bridges the vocabulary gap between query intent and code identifiers.
 3. **Embed twice**:
    - The description (prefixed with `filePath [symbol]:`) is embedded → stored as `embedding` BLOB
@@ -118,6 +118,8 @@ ollama pull gemma4:26b
 ollama pull embeddinggemma
 ```
 
+The Python chunker uses the native `tree-sitter` Node binding. Prebuilds ship for darwin-arm64, darwin-x64, and linux-x64; on Windows or musl-libc Linux `npm install` will compile from source via `node-gyp` (requires Python 3 + a C/C++ toolchain).
+
 ### Install globally
 
 ```bash
@@ -203,7 +205,7 @@ tail -f .search-code/last-index.log
 
 ## Roadmap
 
-- **Multi-language chunkers** — describer + embedder are language-agnostic. Adding Python, Go, Rust chunkers (via oxc-parser equivalents or tree-sitter) extends coverage. TS/JS only today.
+- **More language chunkers** — TS/JS (via oxc-parser) and Python (via tree-sitter) ship today. Go and Rust chunkers via the same tree-sitter mechanism would extend coverage further; the describer + embedder + BM25 layers are language-agnostic.
 - **Wider SWE-PolyBench coverage** — 24 instances across 3 repos today. Indexing more repos would tighten the variance bounds.
 - **End-to-end agent benchmark** — measure not just file-finding but task completion + total tokens for full fix cycles. Closest signal to production value.
 - **Smaller models** — test gemma3:1b describer + smaller embedder for teams with less GPU headroom.
