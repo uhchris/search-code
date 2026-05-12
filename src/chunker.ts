@@ -1,9 +1,11 @@
 import crypto from 'crypto';
 import fs from 'fs';
-// oxc-parser ships native arm64 binaries; no WASM, no async initialization required
-import { parseSync } from 'oxc-parser';
 import path from 'path';
+import { extractTs, type ExtractResult, type RawChunk } from './chunker-ts.js';
+import { extractPython, initPython } from './chunker-python.js';
 import { loadConfig, PROJECT_ROOT } from './project.js';
+
+export { extractManifest } from './chunker-ts.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,19 +14,20 @@ export interface Chunk {
   startLine: number; // 1-indexed
   endLine: number; // 1-indexed inclusive
   symbolName: string | null;
-  language: string; // 'typescript' | 'javascript'
+  language: string; // 'typescript' | 'javascript' | 'python'
   rawCode: string;
-  codeHash: string; // sha256 hex of rawCode
+  codeHash: string; // sha256 hex of function body (not the prefixes)
   fileMtime: number; // file modification time as Unix ms
 }
 
 // ─── Language mapping ─────────────────────────────────────────────────────────
 
-const EXT_TO_LANG: Record<string, 'typescript' | 'javascript'> = {
+const EXT_TO_LANG: Record<string, 'typescript' | 'javascript' | 'python'> = {
   '.ts': 'typescript',
   '.tsx': 'typescript',
   '.js': 'javascript',
   '.jsx': 'javascript',
+  '.py': 'python',
 };
 
 // ─── Glob matching ────────────────────────────────────────────────────────────
@@ -59,233 +62,28 @@ function buildLineOffsets(code: string): number[] {
   return offsets;
 }
 
-// Returns 1-indexed line number for a given character offset (binary search).
-function offsetToLine(offsets: number[], offset: number): number {
-  let lo = 0,
-    hi = offsets.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (offsets[mid] <= offset) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo + 1;
+function offsetToLineFn(offsets: number[]): (offset: number) => number {
+  return (offset: number) => {
+    let lo = 0,
+      hi = offsets.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (offsets[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
 }
 
-// ─── AST extraction ───────────────────────────────────────────────────────────
-
-interface RawChunk {
-  startOffset: number;
-  endOffset: number; // exclusive (ESTree convention)
-  symbolName: string | null;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ASTNode = any;
-
-function extractFromDecl(node: ASTNode, exportWrapper: ASTNode | null, result: RawChunk[]): void {
-  const container = exportWrapper ?? node;
-
-  switch (node.type) {
-    case 'FunctionDeclaration': {
-      result.push({
-        startOffset: container.start,
-        endOffset: container.end,
-        symbolName: node.id?.name ?? null,
-      });
-      break;
-    }
-
-    case 'ClassDeclaration': {
-      result.push({
-        startOffset: container.start,
-        endOffset: container.end,
-        symbolName: node.id?.name ?? null,
-      });
-      // Extract each method as its own chunk
-      for (const member of node.body?.body ?? []) {
-        if (member.type === 'MethodDefinition' && member.key?.type === 'Identifier') {
-          result.push({
-            startOffset: member.start,
-            endOffset: member.end,
-            symbolName: member.key.name,
-          });
-        }
-      }
-      break;
-    }
-
-    case 'VariableDeclaration': {
-      for (const decl of node.declarations ?? []) {
-        const init = decl.init;
-        if (!init) continue;
-        const name = decl.id?.type === 'Identifier' ? decl.id.name : null;
-
-        // Function-shaped initializers — always chunk (named function exports, hooks)
-        if (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression') {
-          result.push({ startOffset: container.start, endOffset: container.end, symbolName: name });
-          continue;
-        }
-
-        // Top-level EXPORTED declarations: always chunk regardless of init kind.
-        // Captures Drizzle table defs (`sqliteTable(...)`), zod schemas (`z.object(...)`),
-        // exported config objects, route registries — all structural plumbing whose
-        // descriptions and embed manifests carry domain vocabulary worth indexing.
-        if (exportWrapper) {
-          result.push({ startOffset: container.start, endOffset: container.end, symbolName: name });
-
-          // tRPC-router pattern: `export const fooRouter = router({ procA: ..., procB: ... })`.
-          // Without per-procedure chunks, only the first ~maxChunkLines lines of the router
-          // get chunked (Mode 1 failure). Walk into CallExpression arguments and emit a
-          // sub-chunk for any Property whose value spans more than a few lines —
-          // captures procedure handlers buried inside the router object literal.
-          extractObjectPropertyChunks(init, result);
-          continue;
-        }
-
-        // Non-exported CallExpression with a function first-arg — HOC pattern at
-        // module scope (e.g. `const X = memo(() => {})` without re-export).
-        if (init.type === 'CallExpression') {
-          const firstArg = init.arguments?.[0];
-          if (
-            firstArg &&
-            (firstArg.type === 'ArrowFunctionExpression' || firstArg.type === 'FunctionExpression')
-          ) {
-            result.push({
-              startOffset: container.start,
-              endOffset: container.end,
-              symbolName: name,
-            });
-          }
-        }
-      }
-      break;
-    }
-  }
-}
-
-// Mode 1 fix: tRPC routers, command palettes, route registries, and similar
-// dispatch-tables are CallExpression arguments shaped like `{ procA, procB, … }`
-// where each property's value is a long expression chain. The outer
-// VariableDeclaration emits one chunk capped at maxChunkLines, so handlers
-// past the cap are never indexed. Walk into CallExpression args' ObjectExpression
-// properties and emit a sub-chunk per non-trivial Property.
-const PROPERTY_CHUNK_MIN_BYTES = 80; // ≈3 lines of code; skip 1-line Drizzle column defs
-
-function extractObjectPropertyChunks(initNode: ASTNode, out: RawChunk[]): void {
-  if (!initNode || typeof initNode !== 'object') return;
-  if (initNode.type !== 'CallExpression') return;
-  for (const arg of initNode.arguments ?? []) {
-    if (!arg || arg.type !== 'ObjectExpression') continue;
-    for (const prop of arg.properties ?? []) {
-      if (!prop || prop.type !== 'Property') continue;
-      if (prop.computed) continue;
-      const keyName =
-        prop.key?.type === 'Identifier'
-          ? prop.key.name
-          : prop.key?.type === 'Literal' && typeof prop.key.value === 'string'
-            ? prop.key.value
-            : null;
-      if (!keyName) continue;
-      const value = prop.value;
-      if (!value || value.end - value.start < PROPERTY_CHUNK_MIN_BYTES) continue;
-      out.push({ startOffset: prop.start, endOffset: prop.end, symbolName: keyName });
-    }
-  }
-}
-
-function collectFromBody(body: ASTNode[]): RawChunk[] {
-  const result: RawChunk[] = [];
-
-  for (const node of body) {
-    if (
-      (node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration') &&
-      node.declaration
-    ) {
-      extractFromDecl(node.declaration, node, result);
-    } else {
-      extractFromDecl(node, null, result);
-    }
-  }
-
-  return result;
-}
-
-// ─── Manifest extraction ──────────────────────────────────────────────────────
+// ─── Initialization ───────────────────────────────────────────────────────────
 //
-// Collects identifier-shaped tokens from the chunk AST. Prepended to the embed
-// text so plumbing files (Drizzle schemas, repo readers) surface their domain
-// vocabulary in dense space — column names like `sandbox_id` and call-site
-// identifiers like `userIntegrations` that don't appear in the LLM-generated
-// description.
-//
-// Walks ESTree `Identifier` and identifier-shaped string `Literal` nodes,
-// skipping subtrees under any TS*-prefixed node so type-position primitives
-// (`string`, `number`, `Promise`, `Array`) don't leak into the manifest.
-// No hand-coded keyword list — ESTree never emits language keywords as
-// Identifier nodes.
+// oxc-parser is sync. tree-sitter native binding loads sync too, but we expose
+// async init for forward compatibility with web-tree-sitter (WASM) if we ever
+// need to swap.
 
-const MANIFEST_TOKEN_LIMIT = 50;
-const IDENT_LITERAL_RE = /^[a-zA-Z_][a-zA-Z0-9_]{1,49}$/;
-
-export function extractManifest(rawCode: string): string {
-  let parsed: ReturnType<typeof parseSync>;
-  try {
-    parsed = parseSync('manifest.ts', rawCode);
-  } catch {
-    return '';
-  }
-
-  const tokens = new Set<string>();
-
-  function visit(node: ASTNode, inTypePosition: boolean): void {
-    if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      for (const child of node) visit(child, inTypePosition);
-      return;
-    }
-
-    const type = node.type;
-    // Any TypeScript type-AST subtree (TSTypeAnnotation, TSTypeReference,
-    // TSStringKeyword, TSTypeParameterInstantiation, …) — recurse without
-    // collecting so type primitives never enter the manifest.
-    const entersTypePosition = typeof type === 'string' && type.startsWith('TS');
-    const childrenInType = inTypePosition || entersTypePosition;
-
-    if (!childrenInType && !entersTypePosition) {
-      if (type === 'Identifier' && typeof node.name === 'string') {
-        tokens.add(node.name);
-      } else if (
-        type === 'Literal' &&
-        typeof node.value === 'string' &&
-        IDENT_LITERAL_RE.test(node.value)
-      ) {
-        tokens.add(node.value);
-      }
-    }
-
-    for (const key in node) {
-      if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range')
-        continue;
-      const child = node[key];
-      if (child && typeof child === 'object') visit(child, childrenInType);
-    }
-  }
-
-  visit(parsed.program as ASTNode, false);
-
-  const filtered: string[] = [];
-  for (const t of tokens) {
-    if (t.length < 2) continue;
-    filtered.push(t);
-    if (filtered.length >= MANIFEST_TOKEN_LIMIT) break;
-  }
-
-  return filtered.join(' ');
+export async function init(): Promise<void> {
+  await initPython();
 }
-
-// ─── Initialization (no-op — oxc-parser requires no async setup) ──────────────
-
-export async function init(): Promise<void> {}
 
 // ─── File chunker ─────────────────────────────────────────────────────────────
 
@@ -310,90 +108,68 @@ export async function chunkFile(filePath: string): Promise<Chunk[]> {
   const code = await fs.promises.readFile(filePath, 'utf-8');
   const relPath = path.relative(PROJECT_ROOT, filePath);
 
-  let parsed: ReturnType<typeof parseSync>;
-  try {
-    parsed = parseSync(filePath, code);
-  } catch (err) {
-    console.warn(`[chunker] Parse error in ${relPath}: ${(err as Error).message}`);
-    return [];
-  }
-
-  if (parsed.errors?.length > 0) {
-    for (const e of parsed.errors) {
-      console.warn(`[chunker] Parse warning in ${relPath}: ${e.message}`);
-    }
-  }
-
-  const rawChunks = collectFromBody(parsed.program.body);
-  if (rawChunks.length === 0) return [];
-
   const lineOffsets = buildLineOffsets(code);
+  const offsetToLine = offsetToLineFn(lineOffsets);
   const lines = code.split('\n');
 
-  // Collect top-level import statements to prepend as context for the describer.
-  // This lets the LLM see `import { useState } from 'react'` etc. when describing
-  // a hook, dramatically improving descriptions for cross-cutting concerns.
-  const importLines: string[] = [];
-  for (const node of parsed.program.body) {
-    if (node.type === 'ImportDeclaration') {
-      const startL = offsetToLine(lineOffsets, node.start);
-      const endL = offsetToLine(lineOffsets, Math.max(node.start, node.end - 1));
-      importLines.push(...lines.slice(startL - 1, endL));
-    }
+  let result: ExtractResult;
+  if (lang === 'python') {
+    result = extractPython(code, lines, offsetToLine);
+  } else {
+    result = extractTs(filePath, code, lines, offsetToLine);
   }
-  const importPrefix = importLines.length > 0 ? importLines.join('\n') + '\n\n' : '';
 
-  // Collect top-of-file JSDoc blocks that appear before the first non-import declaration.
-  // These carry module-level domain context (e.g. "Why: agent executions allocate large
-  // per-stream heap") that the describer needs but individual function bodies omit.
-  const fileJsDocLines: string[] = [];
-  {
-    let idx = 0;
-    while (idx < lines.length) {
-      const trimmed = lines[idx].trim();
-      if (trimmed === '') {
-        idx++;
-        continue;
-      }
-      if (trimmed.startsWith('//')) {
-        idx++;
-        continue;
-      }
-      if (trimmed.startsWith('import ')) {
-        // skip multi-line import statements
-        while (idx < lines.length && !lines[idx].includes(';')) idx++;
-        idx++;
-        continue;
-      }
-      if (trimmed.startsWith('/**') || trimmed === '*') {
-        const blockStart = idx;
-        while (idx < lines.length && !lines[idx].includes('*/')) idx++;
-        idx++; // include the closing `*/` line
-        fileJsDocLines.push(...lines.slice(blockStart, idx));
-        continue;
-      }
-      break; // first non-import, non-comment declaration — stop
-    }
+  if (result.parseError) {
+    console.warn(`[chunker] Parse error in ${relPath}: ${result.parseError}`);
+    return [];
   }
-  const fileJsDocPrefix = fileJsDocLines.length > 0 ? fileJsDocLines.join('\n') + '\n\n' : '';
+  for (const w of result.parseWarnings) {
+    console.warn(`[chunker] Parse warning in ${relPath}: ${w}`);
+  }
 
+  if (result.rawChunks.length === 0) return [];
+
+  return assembleChunks(
+    result.rawChunks,
+    result.importPrefix,
+    result.fileDocPrefix,
+    lines,
+    offsetToLine,
+    relPath,
+    lang,
+    fileMtime,
+    minChunkLines,
+    maxChunkLines,
+  );
+}
+
+function assembleChunks(
+  rawChunks: RawChunk[],
+  importPrefix: string,
+  fileDocPrefix: string,
+  lines: string[],
+  offsetToLine: (offset: number) => number,
+  relPath: string,
+  lang: string,
+  fileMtime: number,
+  minChunkLines: number,
+  maxChunkLines: number,
+): Chunk[] {
   const chunks: Chunk[] = [];
 
   for (const raw of rawChunks) {
-    const startLine = offsetToLine(lineOffsets, raw.startOffset);
-    // endOffset is exclusive; last character is at endOffset - 1
-    const rawEndLine = offsetToLine(lineOffsets, Math.max(raw.startOffset, raw.endOffset - 1));
+    const startLine = offsetToLine(raw.startOffset);
+    const rawEndLine = offsetToLine(Math.max(raw.startOffset, raw.endOffset - 1));
     const endLine = Math.min(rawEndLine, startLine + maxChunkLines - 1);
 
     const lineCount = endLine - startLine + 1;
-    // Named functions are complete semantic units — always include them.
-    // Only apply minChunkLines to unnamed chunks (anonymous exports) to avoid noise.
+    // Named symbols are complete semantic units — always keep.
+    // minChunkLines only applies to unnamed chunks (anonymous exports).
     if (raw.symbolName === null && lineCount < minChunkLines) continue;
     if (lineCount < 2) continue; // absolute floor: skip single-line no-ops
 
     const functionCode = lines.slice(startLine - 1, endLine).join('\n');
-    // codeHash is based on the function body only — stable across prefix changes
-    const rawCode = fileJsDocPrefix + importPrefix + functionCode;
+    const rawCode = fileDocPrefix + importPrefix + functionCode;
 
     chunks.push({
       filePath: relPath,
@@ -420,10 +196,9 @@ export interface WalkStats {
 
 // `knownMtimes` (filePath → stored file_mtime) gates the parser: files whose
 // disk mtime is ≤ the stored mtime are skipped entirely. Pass an empty Map to
-// force a full re-walk (initial index, or after schema/chunker rule change).
-// `seenFilePaths`, if provided, is populated with every matched file path
-// (parsed OR mtime-skipped) so callers can compute orphans correctly — files
-// the walker skipped on disk still exist and must NOT be deleted from the DB.
+// force a full re-walk. `seenFilePaths`, if provided, is populated with every
+// matched file path (parsed OR mtime-skipped) so callers can compute orphans
+// correctly — skipped files still exist and must NOT be deleted from the DB.
 export async function* walkAndChunk(
   projectRoot: string,
   knownMtimes: Map<string, number> = new Map(),
@@ -456,7 +231,7 @@ export async function* walkAndChunk(
       if (stat.isDirectory()) continue;
 
       const ext = path.extname(absFilePath).toLowerCase();
-      if (!EXT_TO_LANG[ext]) continue; // skip non-TS/JS silently
+      if (!EXT_TO_LANG[ext]) continue;
 
       const relPath = path.relative(projectRoot, absFilePath);
       if (matchesAnyExcludePattern(relPath, excludePatterns)) continue;
@@ -464,11 +239,6 @@ export async function* walkAndChunk(
       stats.filesSeen++;
       seenFilePaths?.add(relPath);
 
-      // mtime gate: skip parse + chunk if disk mtime hasn't advanced beyond
-      // the stored mtime for this path. Saves the heavy oxc-parser pass on
-      // unchanged files. New/changed files (and files absent from knownMtimes)
-      // still get parsed. seenFilePaths is populated above so orphan cleanup
-      // does NOT delete the existing chunks of an unchanged file.
       const known = knownMtimes.get(relPath);
       if (known !== undefined && stat.mtimeMs <= known) {
         stats.filesSkippedMtime++;
